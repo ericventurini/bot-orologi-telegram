@@ -13,13 +13,39 @@ from zoneinfo import ZoneInfo
 # BOT OFFERTE OROLOGI AMAZON -> TELEGRAM
 # ==========================================
 FILE_PUBBLICATI = "pubblicati.json"
-MAX_POST_PER_GIRO = 2      # Massimo 2 post ogni 30 min (niente spam)
-MAX_STORICO = 500          # Ricorda gli ultimi 500 orologi già postati
+MAX_POST_PER_GIRO = 2      # Massimo 2 post ogni 30 min
+MAX_STORICO = 500          # Ricorda gli ultimi 500 ASIN già postati
 
-# Feed pubblici cali di prezzo Amazon Italia (categoria orologi)
+# Feed pubblici cali di prezzo Amazon Italia filtrati per categoria Orologi
 FEED_URLS = [
-    "https://it.camelcamelcamel.com/top_drops/feed?t=relative&i=7&s=amazon&d=15&c=watches",
-    "https://it.camelcamelcamel.com/top_drops/feed?t=relative&i=7&s=new&d=15&c=watches",
+    "https://it.camelcamelcamel.com/top_drops/feed?t=relative&i=7&s=amazon&d=15&bn=orologi",
+    "https://it.camelcamelcamel.com/top_drops/feed?t=relative&i=7&s=new&d=15&bn=orologi",
+    "https://it.camelcamelcamel.com/popular/feed?bn=orologi",
+]
+
+# Deve contenere ALMENO una di queste parole/marche (controllo a parola intera)
+PAROLE_OROLOGI = [
+    "orologio", "orologi", "cronografo", "chronograph", "smartwatch",
+    "wristwatch", "montre", "uhren",
+    "seiko", "casio", "g-shock", "gshock", "edifice", "citizen", "orient",
+    "tissot", "hamilton", "timex", "bulova", "festina", "sector", "swatch",
+    "breil", "locman", "philip watch", "invicta", "longines", "mido",
+    "certina", "spinnaker", "pagani design", "steeldive", "san martin",
+    "cadisen", "mondaine", "suunto",
+    "garmin forerunner", "garmin fenix", "garmin instinct", "garmin epix", "garmin venu",
+]
+
+# Se contiene UNA di queste parole viene scartato subito (accessori, giocattoli, ecc.)
+PAROLE_VIETATE = [
+    "cover", "custodia", "pellicola", "vetro", "protezione schermo",
+    "cinturino", "cinturini", "ricambio", "caricatore", "caricabatterie",
+    "cavo", "supporto", "scatola", "porta orologi", "kit riparazione",
+    "parete", "muro", "sveglia", "tavolo", "comodino",
+    "calcolatrice", "tastiera", "pianoforte", "stampante", "etichettatrice",
+    "toner", "cartuccia", "figurine", "pupazzo", "giocattolo", "giocattoli",
+    "jouets", "lego", "libro", "portafoglio", "borsa", "occhiali", "profumo",
+    "collana", "anello", "orecchini", "iphone", "ipad", "airpods",
+    "pila", "pile", "batteria", "attrezzi",
 ]
 
 HEADERS = {
@@ -50,6 +76,23 @@ def carica_pubblicati():
 def salva_pubblicati(lista):
     with open(FILE_PUBBLICATI, "w", encoding="utf-8") as f:
         json.dump(lista[-MAX_STORICO:], f, indent=2)
+
+
+def contiene_parola(testo, lista_parole):
+    for parola in lista_parole:
+        if re.search(r"\b" + re.escape(parola) + r"\b", testo, flags=re.IGNORECASE):
+            return parola
+    return None
+
+
+def e_un_orologio(titolo):
+    vietata = contiene_parola(titolo, PAROLE_VIETATE)
+    if vietata:
+        return False, f"scartato per parola vietata '{vietata}'"
+    trovata = contiene_parola(titolo, PAROLE_OROLOGI)
+    if trovata:
+        return True, f"ok ('{trovata}')"
+    return False, "nessuna parola/marca di orologi nel titolo"
 
 
 def estrai_asin(testo):
@@ -91,11 +134,18 @@ def scarica_offerte():
         items = root.findall(".//item")
         print(f"Trovati {len(items)} elementi nel feed.")
 
-        for item in items:
+        for idx, item in enumerate(items):
             titolo = (item.findtext("title") or "").strip()
             link = (item.findtext("link") or "").strip()
             guid = (item.findtext("guid") or "").strip()
             desc = (item.findtext("description") or "").strip()
+
+            if idx < 3:
+                print(f"  Esempio {idx + 1}: {titolo[:90]}")
+
+            valido, motivo = e_un_orologio(titolo)
+            if not valido:
+                continue
 
             asin = estrai_asin(f"{link} {guid} {desc}")
             if not asin or asin in visti:
@@ -106,8 +156,10 @@ def scarica_offerte():
                 "asin": asin,
                 "titolo": titolo,
                 "immagine": estrai_immagine(desc),
+                "motivo": motivo,
             })
 
+    print(f"Orologi validi dopo il filtro: {len(offerte)}")
     return offerte
 
 
@@ -125,7 +177,6 @@ def invia_su_telegram(token, channel, testo_html, url_amazon, immagine=None):
         ]]
     })
 
-    # Prova prima con la foto del prodotto, se disponibile
     if immagine:
         url_api = f"https://api.telegram.org/bot{token}/sendPhoto"
         payload = urllib.parse.urlencode({
@@ -143,7 +194,6 @@ def invia_su_telegram(token, channel, testo_html, url_amazon, immagine=None):
         except Exception as e:
             print(f"Invio con foto fallito ({e}), riprovo solo testo...")
 
-    # Fallback: messaggio testuale pulito con bottone
     url_api = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = urllib.parse.urlencode({
         "chat_id": channel,
@@ -181,7 +231,7 @@ def main():
     offerte = scarica_offerte()
 
     if not offerte:
-        print(f"[{ora_italia()}] Nessuna offerta trovata in questo giro.")
+        print(f"[{ora_italia()}] Nessun orologio valido trovato in questo giro.")
         return
 
     nuovi_post = 0
@@ -201,7 +251,7 @@ def main():
         )
 
         if invia_su_telegram(token, channel, messaggio, url_amazon, off["immagine"]):
-            print(f"Pubblicato sul canale: {off['asin']} | {off['titolo'][:60]}")
+            print(f"Pubblicato sul canale: {off['asin']} ({off['motivo']}) | {off['titolo'][:60]}")
             pubblicati.append(off["asin"])
             nuovi_post += 1
 
@@ -209,7 +259,7 @@ def main():
         salva_pubblicati(pubblicati)
         print(f"[{ora_italia()}] Completato: {nuovi_post} nuove offerte pubblicate.")
     else:
-        print(f"[{ora_italia()}] Tutte le offerte trovate erano già state pubblicate.")
+        print(f"[{ora_italia()}] Tutti gli orologi trovati erano già stati pubblicati.")
 
 
 if __name__ == "__main__":
