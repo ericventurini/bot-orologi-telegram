@@ -15,13 +15,16 @@ from zoneinfo import ZoneInfo
 FILE_PUBBLICATI = "pubblicati.json"
 MAX_POST_PER_GIRO = 2      # Massimo 2 post ogni 30 min
 MAX_STORICO = 500          # Ricorda gli ultimi 500 ASIN già postati
-SCONTO_MINIMO = 10.0       # Pubblica solo sconti >= 10%
+SCONTO_MINIMO = 8.0        # Sconto minimo in % (alzabile poi a 15 o 20)
 
-# Feed ufficiali CamelCamelCamel Italia categoria Orologi
+# Feed CamelCamelCamel Italia: Orologi + Moda (dove Amazon mette gran parte degli orologi) + Elettronica
 FEED_URLS = [
     "https://it.camelcamelcamel.com/top_drops/feed?t=recent&s=relative&i=7&bn=orologi&d=1",
-    "https://it.camelcamelcamel.com/top_drops/feed?t=relative&s=relative&i=7&bn=orologi&d=1",
-    "https://it.camelcamelcamel.com/top_drops/feed?t=absolute&s=relative&i=7&bn=orologi&d=1",
+    "https://it.camelcamelcamel.com/popular.xml?deal=1&bn=orologi",
+    "https://it.camelcamelcamel.com/top_drops/feed?t=recent&s=relative&i=7&bn=moda&d=1",
+    "https://it.camelcamelcamel.com/top_drops/feed?t=relative&s=relative&i=7&bn=moda&d=1",
+    "https://it.camelcamelcamel.com/top_drops/feed?t=absolute&s=relative&i=7&bn=moda&d=1",
+    "https://it.camelcamelcamel.com/top_drops/feed?t=recent&s=relative&i=7&bn=elettronica&d=1",
 ]
 
 # Deve contenere ALMENO una di queste parole/marche
@@ -40,19 +43,22 @@ PAROLE_OROLOGI = [
     "michael kors", "chronostar", "d1 milano", "zeppelin", "vostok",
 ]
 
-# Accessori o prodotti fuori tema da bloccare sempre
+# Blocca solo veri accessori / prodotti fuori tema (senza colpire "vetro zaffiro" o "cinturino in pelle")
 PAROLE_VIETATE = [
-    "cover", "custodia", "case", "pellicola", "vetro", "protezione schermo",
-    "screen protector", "cinturino", "cinturini", "strap", "band", "ricambio",
-    "caricatore", "caricabatterie", "charger", "cavo", "supporto", "scatola",
+    "compatibile con", "cinturino per", "cinturini per",
+    "cinturino di ricambio", "cinturino compatibile", "cinturini compatibili",
+    "vetro temperato", "pellicola", "protezione schermo", "screen protector",
+    "cover", "custodia", "ricambio", "caricatore", "caricabatterie", "charger",
+    "cavo di ricarica", "supporto di ricarica", "scatola porta orologi",
     "porta orologi", "kit riparazione", "parete", "muro", "sveglia", "tavolo",
     "comodino", "calcolatrice", "tastiera", "pianoforte", "stampante",
     "etichettatrice", "toner", "cartuccia", "figurine", "pupazzo", "giocattolo",
     "giocattoli", "jouets", "lego", "libro", "portafoglio", "borsa", "zaino",
-    "occhiali", "profumo", "collana", "anello", "orecchini", "bracciale",
-    "cintura", "scarpe", "stivali", "maglietta", "t-shirt", "felpa", "giacca",
-    "pantaloni", "iphone", "ipad", "airpods", "pila", "pile", "batteria",
-    "attrezzi", "ps4", "ps5", "xbox", "nintendo", "dvd", "blu-ray",
+    "occhiali", "profumo", "collana", "anello", "orecchini", "cintura",
+    "scarpe", "stivali", "maglietta", "t-shirt", "felpa", "giacca",
+    "pantaloni", "sneakers", "jeans", "camicia", "mutande", "boxer", "calzini",
+    "iphone", "ipad", "airpods", "attrezzi", "ps4", "ps5", "xbox", "nintendo",
+    "dvd", "blu-ray",
 ]
 
 HEADERS = {
@@ -161,15 +167,15 @@ def scarica_offerte():
             guid = (item.findtext("guid") or "").strip()
             desc = (item.findtext("description") or "").strip()
 
-            if idx < 3:
-                print(f"    Esempio {idx + 1}: {titolo_grezzo[:90]}")
-
             titolo_pulito, sconto_pct = analizza_titolo(titolo_grezzo)
+            valido, motivo = e_un_orologio(titolo_pulito)
+
+            if idx < 2:
+                print(f"    Esempio {idx + 1}: {titolo_grezzo[:80]} -> {motivo}")
 
             if sconto_pct is not None and sconto_pct < SCONTO_MINIMO:
                 continue
 
-            valido, motivo = e_un_orologio(titolo_pulito)
             if not valido:
                 continue
 
