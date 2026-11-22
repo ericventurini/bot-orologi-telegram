@@ -15,33 +15,32 @@ from zoneinfo import ZoneInfo
 FILE_PUBBLICATI = "pubblicati.json"
 MAX_POST_PER_GIRO = 2      # Massimo 2 post ogni 30 min
 MAX_STORICO = 500          # Ricorda gli ultimi 500 ASIN già postati
+SCONTO_MINIMO = 10.0       # Pubblica solo sconti >= 10%
 
-# Feed pubblici Amazon Italia (slug categorie ufficiali CamelCamelCamel)
+# Feed ufficiali CamelCamelCamel Italia categoria Orologi
 FEED_URLS = [
-    "https://it.camelcamelcamel.com/top_drops/feed?bn=watches&t=recent&i=7&s=relative&d=10",
-    "https://it.camelcamelcamel.com/top_drops/feed?bn=watches&t=relative&i=7&s=relative&d=10",
-    "https://it.camelcamelcamel.com/popular.xml?deal=1&bn=watches",
-    "https://it.camelcamelcamel.com/top_drops/feed?bn=fashion&t=recent&i=7&s=relative&d=10",
-    "https://it.camelcamelcamel.com/popular.xml?deal=1&bn=fashion",
-    "https://it.camelcamelcamel.com/top_drops/feed?bn=electronics&t=recent&i=7&s=relative&d=10",
-    "https://it.camelcamelcamel.com/top_drops/feed?t=recent&i=7&s=relative&d=10",
+    "https://it.camelcamelcamel.com/top_drops/feed?t=recent&s=relative&i=7&bn=orologi&d=1",
+    "https://it.camelcamelcamel.com/top_drops/feed?t=relative&s=relative&i=7&bn=orologi&d=1",
+    "https://it.camelcamelcamel.com/top_drops/feed?t=absolute&s=relative&i=7&bn=orologi&d=1",
 ]
 
-# Deve contenere ALMENO una di queste parole/marche (controllo a parola intera)
+# Deve contenere ALMENO una di queste parole/marche
 PAROLE_OROLOGI = [
     "orologio", "orologi", "cronografo", "chronograph", "smartwatch",
-    "wristwatch", "montre", "uhren",
-    "seiko", "casio", "g-shock", "gshock", "edifice", "citizen", "orient",
-    "tissot", "hamilton", "timex", "bulova", "festina", "sector", "swatch",
-    "breil", "locman", "philip watch", "invicta", "longines", "mido",
-    "certina", "spinnaker", "pagani design", "steeldive", "san martin",
-    "cadisen", "mondaine", "suunto", "amazfit", "coros",
-    "apple watch", "galaxy watch", "pixel watch", "huawei watch", "watch gt",
-    "garmin forerunner", "garmin fenix", "garmin instinct", "garmin epix",
-    "garmin venu", "garmin vivoactive",
+    "wristwatch", "montre", "uhren", "watch",
+    "seiko", "casio", "g-shock", "gshock", "edifice", "baby-g", "citizen",
+    "orient", "tissot", "hamilton", "timex", "bulova", "festina", "sector",
+    "swatch", "breil", "locman", "philip watch", "invicta", "longines",
+    "mido", "certina", "spinnaker", "pagani design", "steeldive",
+    "san martin", "cadisen", "mondaine", "suunto", "amazfit", "coros",
+    "polar", "garmin", "fossil", "diesel", "maserati", "emporio armani",
+    "armani exchange", "tommy hilfiger", "hugo boss", "guess", "morellato",
+    "lorus", "skagen", "bering", "nixon", "police", "lotus", "viceroy",
+    "daniel wellington", "cluse", "ice-watch", "lacoste", "calvin klein",
+    "michael kors", "chronostar", "d1 milano", "zeppelin", "vostok",
 ]
 
-# Se contiene UNA di queste parole viene scartato subito
+# Accessori o prodotti fuori tema da bloccare sempre
 PAROLE_VIETATE = [
     "cover", "custodia", "case", "pellicola", "vetro", "protezione schermo",
     "screen protector", "cinturino", "cinturini", "strap", "band", "ricambio",
@@ -53,7 +52,7 @@ PAROLE_VIETATE = [
     "occhiali", "profumo", "collana", "anello", "orecchini", "bracciale",
     "cintura", "scarpe", "stivali", "maglietta", "t-shirt", "felpa", "giacca",
     "pantaloni", "iphone", "ipad", "airpods", "pila", "pile", "batteria",
-    "attrezzi",
+    "attrezzi", "ps4", "ps5", "xbox", "nintendo", "dvd", "blu-ray",
 ]
 
 HEADERS = {
@@ -103,6 +102,20 @@ def e_un_orologio(titolo):
     return False, "non è un orologio"
 
 
+def analizza_titolo(titolo_grezzo):
+    """Separa il nome pulito dell'orologio dalla percentuale di sconto."""
+    sconto_pct = None
+    m_pct = re.search(r"\bdown\s+([\d.,]+)%", titolo_grezzo, flags=re.IGNORECASE)
+    if m_pct:
+        try:
+            sconto_pct = float(m_pct.group(1).replace(",", "."))
+        except ValueError:
+            sconto_pct = None
+
+    titolo_pulito = re.split(r"\s*-\s*down\s+", titolo_grezzo, maxsplit=1, flags=re.IGNORECASE)[0].strip()
+    return titolo_pulito, sconto_pct
+
+
 def estrai_asin(testo):
     m = re.search(r"/(?:product|dp|gp/product)/([A-Z0-9]{10})", testo)
     if m:
@@ -143,15 +156,20 @@ def scarica_offerte():
         print(f"  Elementi trovati: {len(items)}")
 
         for idx, item in enumerate(items):
-            titolo = (item.findtext("title") or "").strip()
+            titolo_grezzo = (item.findtext("title") or "").strip()
             link = (item.findtext("link") or "").strip()
             guid = (item.findtext("guid") or "").strip()
             desc = (item.findtext("description") or "").strip()
 
-            if idx < 2:
-                print(f"    Esempio {idx + 1}: {titolo[:85]}")
+            if idx < 3:
+                print(f"    Esempio {idx + 1}: {titolo_grezzo[:90]}")
 
-            valido, motivo = e_un_orologio(titolo)
+            titolo_pulito, sconto_pct = analizza_titolo(titolo_grezzo)
+
+            if sconto_pct is not None and sconto_pct < SCONTO_MINIMO:
+                continue
+
+            valido, motivo = e_un_orologio(titolo_pulito)
             if not valido:
                 continue
 
@@ -162,7 +180,8 @@ def scarica_offerte():
             visti.add(asin)
             offerte.append({
                 "asin": asin,
-                "titolo": titolo,
+                "titolo": titolo_pulito,
+                "sconto_pct": sconto_pct,
                 "immagine": estrai_immagine(desc),
                 "motivo": motivo,
             })
@@ -252,10 +271,15 @@ def main():
         url_amazon = costruisci_link_amazon(off["asin"], amazon_tag)
         titolo_sicuro = html.escape(off["titolo"])
 
+        if off["sconto_pct"] is not None:
+            intestazione = f"📉 <b>CALO DI PREZZO (-{off['sconto_pct']:.0f}%)</b>"
+        else:
+            intestazione = "📉 <b>CALO DI PREZZO OROLOGIO</b>"
+
         messaggio = (
-            f"📉 <b>CALO DI PREZZO OROLOGIO</b>\n\n"
+            f"{intestazione}\n\n"
             f"⌚ <b>{titolo_sicuro}</b>\n\n"
-            f"<i>Prezzo rilevato al momento del post — verifica la disponibilità su Amazon.</i>"
+            f"<i>Verifica prezzo aggiornato e disponibilità su Amazon.</i>"
         )
 
         if invia_su_telegram(token, channel, messaggio, url_amazon, off["immagine"]):
