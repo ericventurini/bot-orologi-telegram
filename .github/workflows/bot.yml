@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: "*/30 * * * *"
   workflow_dispatch:
+    inputs:
+      test_grafica:
+        description: "Spunta per forzare 1 post di prova con la nuova grafica"
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: write
@@ -20,11 +26,15 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Installa libreria grafica Pillow
+        run: pip install pillow
+
       - name: Cerca e pubblica offerte orologi
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
           AMAZON_TAG: ${{ secrets.AMAZON_TAG }}
+          TEST_GRAFICA: ${{ github.event.inputs.test_grafica || 'false' }}
         run: python bot_orologi.py
 
       - name: Salva elenco orologi già pubblicati
