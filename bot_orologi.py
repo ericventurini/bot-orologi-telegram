@@ -16,11 +16,15 @@ FILE_PUBBLICATI = "pubblicati.json"
 MAX_POST_PER_GIRO = 2      # Massimo 2 post ogni 30 min
 MAX_STORICO = 500          # Ricorda gli ultimi 500 ASIN già postati
 
-# Feed pubblici cali di prezzo Amazon Italia filtrati per categoria Orologi
+# Feed pubblici Amazon Italia (slug categorie ufficiali CamelCamelCamel)
 FEED_URLS = [
-    "https://it.camelcamelcamel.com/top_drops/feed?t=relative&i=7&s=amazon&d=15&bn=orologi",
-    "https://it.camelcamelcamel.com/top_drops/feed?t=relative&i=7&s=new&d=15&bn=orologi",
-    "https://it.camelcamelcamel.com/popular/feed?bn=orologi",
+    "https://it.camelcamelcamel.com/top_drops/feed?bn=watches&t=recent&i=7&s=relative&d=10",
+    "https://it.camelcamelcamel.com/top_drops/feed?bn=watches&t=relative&i=7&s=relative&d=10",
+    "https://it.camelcamelcamel.com/popular.xml?deal=1&bn=watches",
+    "https://it.camelcamelcamel.com/top_drops/feed?bn=fashion&t=recent&i=7&s=relative&d=10",
+    "https://it.camelcamelcamel.com/popular.xml?deal=1&bn=fashion",
+    "https://it.camelcamelcamel.com/top_drops/feed?bn=electronics&t=recent&i=7&s=relative&d=10",
+    "https://it.camelcamelcamel.com/top_drops/feed?t=recent&i=7&s=relative&d=10",
 ]
 
 # Deve contenere ALMENO una di queste parole/marche (controllo a parola intera)
@@ -31,21 +35,25 @@ PAROLE_OROLOGI = [
     "tissot", "hamilton", "timex", "bulova", "festina", "sector", "swatch",
     "breil", "locman", "philip watch", "invicta", "longines", "mido",
     "certina", "spinnaker", "pagani design", "steeldive", "san martin",
-    "cadisen", "mondaine", "suunto",
-    "garmin forerunner", "garmin fenix", "garmin instinct", "garmin epix", "garmin venu",
+    "cadisen", "mondaine", "suunto", "amazfit", "coros",
+    "apple watch", "galaxy watch", "pixel watch", "huawei watch", "watch gt",
+    "garmin forerunner", "garmin fenix", "garmin instinct", "garmin epix",
+    "garmin venu", "garmin vivoactive",
 ]
 
-# Se contiene UNA di queste parole viene scartato subito (accessori, giocattoli, ecc.)
+# Se contiene UNA di queste parole viene scartato subito
 PAROLE_VIETATE = [
-    "cover", "custodia", "pellicola", "vetro", "protezione schermo",
-    "cinturino", "cinturini", "ricambio", "caricatore", "caricabatterie",
-    "cavo", "supporto", "scatola", "porta orologi", "kit riparazione",
-    "parete", "muro", "sveglia", "tavolo", "comodino",
-    "calcolatrice", "tastiera", "pianoforte", "stampante", "etichettatrice",
-    "toner", "cartuccia", "figurine", "pupazzo", "giocattolo", "giocattoli",
-    "jouets", "lego", "libro", "portafoglio", "borsa", "occhiali", "profumo",
-    "collana", "anello", "orecchini", "iphone", "ipad", "airpods",
-    "pila", "pile", "batteria", "attrezzi",
+    "cover", "custodia", "case", "pellicola", "vetro", "protezione schermo",
+    "screen protector", "cinturino", "cinturini", "strap", "band", "ricambio",
+    "caricatore", "caricabatterie", "charger", "cavo", "supporto", "scatola",
+    "porta orologi", "kit riparazione", "parete", "muro", "sveglia", "tavolo",
+    "comodino", "calcolatrice", "tastiera", "pianoforte", "stampante",
+    "etichettatrice", "toner", "cartuccia", "figurine", "pupazzo", "giocattolo",
+    "giocattoli", "jouets", "lego", "libro", "portafoglio", "borsa", "zaino",
+    "occhiali", "profumo", "collana", "anello", "orecchini", "bracciale",
+    "cintura", "scarpe", "stivali", "maglietta", "t-shirt", "felpa", "giacca",
+    "pantaloni", "iphone", "ipad", "airpods", "pila", "pile", "batteria",
+    "attrezzi",
 ]
 
 HEADERS = {
@@ -88,11 +96,11 @@ def contiene_parola(testo, lista_parole):
 def e_un_orologio(titolo):
     vietata = contiene_parola(titolo, PAROLE_VIETATE)
     if vietata:
-        return False, f"scartato per parola vietata '{vietata}'"
+        return False, f"scartato per '{vietata}'"
     trovata = contiene_parola(titolo, PAROLE_OROLOGI)
     if trovata:
         return True, f"ok ('{trovata}')"
-    return False, "nessuna parola/marca di orologi nel titolo"
+    return False, "non è un orologio"
 
 
 def estrai_asin(testo):
@@ -119,20 +127,20 @@ def scarica_offerte():
             with urllib.request.urlopen(req, timeout=20) as resp:
                 xml_data = resp.read()
         except urllib.error.HTTPError as e:
-            print(f"Errore HTTP {e.code} sul feed: {e.reason}")
+            print(f"  Errore HTTP {e.code}: {e.reason}")
             continue
         except Exception as e:
-            print(f"Errore connessione feed: {e}")
+            print(f"  Errore connessione: {e}")
             continue
 
         try:
             root = ET.fromstring(xml_data)
         except ET.ParseError as e:
-            print(f"Errore lettura XML: {e}")
+            print(f"  Errore lettura XML: {e}")
             continue
 
         items = root.findall(".//item")
-        print(f"Trovati {len(items)} elementi nel feed.")
+        print(f"  Elementi trovati: {len(items)}")
 
         for idx, item in enumerate(items):
             titolo = (item.findtext("title") or "").strip()
@@ -140,8 +148,8 @@ def scarica_offerte():
             guid = (item.findtext("guid") or "").strip()
             desc = (item.findtext("description") or "").strip()
 
-            if idx < 3:
-                print(f"  Esempio {idx + 1}: {titolo[:90]}")
+            if idx < 2:
+                print(f"    Esempio {idx + 1}: {titolo[:85]}")
 
             valido, motivo = e_un_orologio(titolo)
             if not valido:
