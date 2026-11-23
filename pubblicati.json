@@ -32,7 +32,9 @@
     "Ferrari Luca Gioielli:16652474646877",
     "Orafo La Morgia:10341117952329",
     "Orafo La Morgia:9666388066633",
-    "2B Gioielli:8373086323025"
+    "2B Gioielli:8373086323025",
+    "Ferrari Luca Gioielli:16522091037021",
+    "Orafo La Morgia:10292126613833"
   ],
   "radar_stock": {
     "D1 Milano:15310840234354": true,
@@ -1092,5 +1094,9 @@
     "Gioielleria Petrillo",
     "Iannicelli 1872",
     "Orafo La Morgia"
+  ],
+  "ultime_marche": [
+    "casio",
+    "tissot"
   ]
 }
