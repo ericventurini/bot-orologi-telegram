@@ -2,6 +2,7 @@ import html
 import io
 import json
 import os
+import random
 import re
 import time
 import urllib.error
@@ -27,8 +28,8 @@ SCONTO_MINIMO_AMAZON_PCT = 6.0
 RISPARMIO_MINIMO_AMAZON_EUR = 10.0
 
 # Soglie Radar rivenditori ufficiali / brand
-SCONTO_MINIMO_RADAR_PCT = 10.0    # Sconti reali dal 10% in su (su Tissot/Seiko/Hamilton sono ottimi)
-PREZZO_MINIMO_RADAR = 35.0        # Copre anche Casio/G-Shock ma evita piccoli ricambi
+SCONTO_MINIMO_RADAR_PCT = 10.0
+PREZZO_MINIMO_RADAR = 35.0
 MAX_LIMITED_CATALOGO_PER_FONTE = 2
 
 # 1) Feed CamelCamelCamel (solo 3 con pausa -> zero errori 429)
@@ -87,7 +88,7 @@ RADAR_FONTI = [
     },
 ]
 
-# Marchi ammessi dal Radar sui rivenditori multimarca (niente paccottiglia)
+# Marchi ammessi dal Radar sui rivenditori multimarca
 MARCHE_TOP_RADAR = [
     "hamilton", "tissot", "seiko", "casio", "g-shock", "gshock", "edifice",
     "citizen", "orient", "bulova", "longines", "mido", "certina", "oris",
@@ -746,6 +747,43 @@ def raccogli_da_radar(stato, forza_test=False):
 
 
 # ==========================================
+# ORDINAMENTO + MESCOLAMENTO PER MARCHIO
+# ==========================================
+def ordina_e_mescola_candidati(candidati):
+    """Mantiene le priorità, ma mescola a caso e alterna marchi diversi nello stesso giro."""
+    candidati.sort(key=lambda x: x["priorita"])
+    unici = []
+    visti_id = set()
+    for c in candidati:
+        if c["id_univoco"] in visti_id:
+            continue
+        visti_id.add(c["id_univoco"])
+        unici.append(c)
+
+    per_priorita = {}
+    for c in unici:
+        p = c["priorita"]
+        marca = (c.get("marca") or c.get("negozio") or "Altro").lower()
+        per_priorita.setdefault(p, {}).setdefault(marca, []).append(c)
+
+    risultato = []
+    for p in sorted(per_priorita.keys()):
+        gruppi_marca = per_priorita[p]
+        marche = list(gruppi_marca.keys())
+        random.shuffle(marche)
+        for m in marche:
+            random.shuffle(gruppi_marca[m])
+
+        # Alterna 1 orologio per ogni marchio disponibile prima di ripeterne uno
+        while any(gruppi_marca[m] for m in marche):
+            for m in marche:
+                if gruppi_marca[m]:
+                    risultato.append(gruppi_marca[m].pop(0))
+
+    return risultato
+
+
+# ==========================================
 # INVIO TELEGRAM
 # ==========================================
 def invia_foto_su_telegram(token, channel, caption_html, testo_bottone, url_bottone, image_bytes):
@@ -867,17 +905,8 @@ def main():
     candidati_radar, stato_modificato = raccogli_da_radar(stato, forza_test)
     candidati.extend(candidati_radar)
 
-    # Priorità: Restock -> Nuovo Drop -> Offerte Amazon -> Sconti ufficiali -> Edizioni limitate
-    candidati.sort(key=lambda x: x["priorita"])
-    unici = []
-    visti_id = set()
-    for c in candidati:
-        if c["id_univoco"] in visti_id:
-            continue
-        visti_id.add(c["id_univoco"])
-        unici.append(c)
-
-    print(f"Candidati totali pronti: {len(unici)}")
+    unici = ordina_e_mescola_candidati(candidati)
+    print(f"Candidati totali pronti (mescolati per marchio): {len(unici)}")
 
     limite = 1 if forza_test else MAX_POST_PER_GIRO
     pubblicati_ora = 0
@@ -904,7 +933,7 @@ def main():
         caption, testo_bottone = formatta_messaggio(item, url_finale, titolo_finale)
 
         if invia_foto_su_telegram(token, channel, caption, testo_bottone, url_finale, scheda_jpg):
-            print(f"Pubblicato [{item['tipo']}]: {titolo_finale[:65]}")
+            print(f"Pubblicato [{item['tipo']} - {item.get('marca')}]: {titolo_finale[:60]}")
             if item["tipo"] == "AMAZON":
                 if item["id_univoco"] not in stato["asin"]:
                     stato["asin"].append(item["id_univoco"])
