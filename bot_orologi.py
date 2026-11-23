@@ -3,6 +3,7 @@ import io
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -19,31 +20,40 @@ FILE_PUBBLICATI = "pubblicati.json"
 NOME_CANALE = "Radar Orologi & Offerte"
 MAX_POST_PER_GIRO = 2             # Massimo 2 post ogni 30 min
 MAX_STORICO = 500
-SCONTO_MINIMO = 8.0               # Sconto minimo in %
-SOLO_CON_FOTO = True              # Se True, salta i prodotti senza foto
+SCONTO_MINIMO_PCT = 6.0           # Pubblica se sconto >= 6%...
+RISPARMIO_MINIMO_EUR = 10.0       # ...oppure se il calo è >= 10€
+SOLO_CON_FOTO = True              # Non pubblica mai post senza foto
 
 FEED_URLS = [
-    "https://it.camelcamelcamel.com/top_drops/feed?t=recent&s=relative&i=7&bn=orologi&d=1",
+    # Categoria Orologi (1g, 30g, top %, top €, popolari in offerta)
+    "https://it.camelcamelcamel.com/top_drops/feed?t=recent&s=relative&i=1&bn=orologi&d=1",
+    "https://it.camelcamelcamel.com/top_drops/feed?t=recent&s=relative&i=30&bn=orologi&d=1",
+    "https://it.camelcamelcamel.com/top_drops/feed?t=relative&s=relative&i=30&bn=orologi&d=1",
+    "https://it.camelcamelcamel.com/top_drops/feed?t=absolute&s=absolute&i=30&bn=orologi&d=1",
     "https://it.camelcamelcamel.com/popular.xml?deal=1&bn=orologi",
-    "https://it.camelcamelcamel.com/top_drops/feed?t=recent&s=relative&i=7&bn=moda&d=1",
-    "https://it.camelcamelcamel.com/top_drops/feed?t=relative&s=relative&i=7&bn=moda&d=1",
-    "https://it.camelcamelcamel.com/top_drops/feed?t=absolute&s=relative&i=7&bn=moda&d=1",
-    "https://it.camelcamelcamel.com/top_drops/feed?t=recent&s=relative&i=7&bn=elettronica&d=1",
+    # Categoria Moda (dove Amazon.it inserisce gran parte degli orologi)
+    "https://it.camelcamelcamel.com/top_drops/feed?t=recent&s=relative&i=1&bn=moda&d=1",
+    "https://it.camelcamelcamel.com/top_drops/feed?t=recent&s=relative&i=30&bn=moda&d=1",
+    "https://it.camelcamelcamel.com/top_drops/feed?t=absolute&s=absolute&i=30&bn=moda&d=1",
+    "https://it.camelcamelcamel.com/popular.xml?deal=1&bn=moda",
+    # Categoria Elettronica (smartwatch e sportwatch) + globale 24h
+    "https://it.camelcamelcamel.com/top_drops/feed?t=recent&s=relative&i=1&bn=elettronica&d=1",
+    "https://it.camelcamelcamel.com/popular.xml?deal=1&bn=elettronica",
+    "https://it.camelcamelcamel.com/top_drops/feed?t=recent&s=relative&i=1&d=1",
 ]
 
 PAROLE_OROLOGI = [
     "orologio", "orologi", "cronografo", "chronograph", "smartwatch",
-    "wristwatch", "montre", "uhren", "watch",
+    "sportwatch", "wristwatch", "montre", "uhren", "watch",
     "seiko", "casio", "g-shock", "gshock", "edifice", "baby-g", "citizen",
     "orient", "tissot", "hamilton", "timex", "bulova", "festina", "sector",
     "swatch", "breil", "locman", "philip watch", "invicta", "longines",
     "mido", "certina", "spinnaker", "pagani design", "steeldive",
     "san martin", "cadisen", "mondaine", "suunto", "amazfit", "coros",
-    "polar", "garmin", "fossil", "diesel", "maserati", "emporio armani",
-    "armani exchange", "tommy hilfiger", "hugo boss", "guess", "morellato",
-    "lorus", "skagen", "bering", "nixon", "police", "lotus", "viceroy",
-    "daniel wellington", "cluse", "ice-watch", "lacoste", "calvin klein",
-    "michael kors", "chronostar", "d1 milano", "zeppelin", "vostok",
+    "polar", "garmin", "fossil", "maserati", "morellato", "lorus", "skagen",
+    "bering", "nixon", "lotus", "viceroy", "daniel wellington", "cluse",
+    "ice-watch", "chronostar", "d1 milano", "zeppelin", "vostok", "junghans",
+    "glycine", "candino", "jaguar", "movado",
 ]
 
 PAROLE_VIETATE = [
@@ -60,7 +70,7 @@ PAROLE_VIETATE = [
     "scarpe", "stivali", "maglietta", "t-shirt", "felpa", "giacca",
     "pantaloni", "sneakers", "jeans", "camicia", "mutande", "boxer", "calzini",
     "iphone", "ipad", "airpods", "attrezzi", "ps4", "ps5", "xbox", "nintendo",
-    "dvd", "blu-ray",
+    "dvd", "blu-ray", "cuffie", "auricolari",
 ]
 
 HEADERS_WEB = {
@@ -129,13 +139,14 @@ def formatta_euro(valore):
 def analizza_titolo_e_prezzi(titolo_grezzo, desc_html=""):
     testo_completo = f"{titolo_grezzo} {html.unescape(desc_html or '')}"
 
+    # Supporta sia "down 15% (20€)" sia "down 20€ (15%)"
     sconto_pct = None
-    m_pct = re.search(r"\bdown\s+([\d.,]+)%", testo_completo, flags=re.IGNORECASE)
+    m_pct = re.search(r"(?:down\s+|\()([\d.,]+)%", testo_completo, flags=re.IGNORECASE)
     if m_pct:
         sconto_pct = parse_euro(m_pct.group(1))
 
     risparmio = None
-    m_risp = re.search(r"\(([\d.,]+)\s*€\)", testo_completo)
+    m_risp = re.search(r"(?:down\s+|\()([\d.,]+)\s*€", testo_completo, flags=re.IGNORECASE)
     if m_risp:
         risparmio = parse_euro(m_risp.group(1))
 
@@ -152,8 +163,11 @@ def analizza_titolo_e_prezzi(titolo_grezzo, desc_html=""):
     if prezzo_nuovo is not None and prezzo_vecchio is None and risparmio is not None:
         prezzo_vecchio = round(prezzo_nuovo + risparmio, 2)
 
+    if sconto_pct is None and prezzo_nuovo and prezzo_vecchio and prezzo_vecchio > prezzo_nuovo:
+        sconto_pct = round(((prezzo_vecchio - prezzo_nuovo) / prezzo_vecchio) * 100.0, 2)
+
     titolo_pulito = re.split(r"\s*-\s*down\s+", titolo_grezzo, maxsplit=1, flags=re.IGNORECASE)[0].strip()
-    return titolo_pulito, sconto_pct, prezzo_nuovo, prezzo_vecchio
+    return titolo_pulito, sconto_pct, risparmio, prezzo_nuovo, prezzo_vecchio
 
 
 def estrai_asin(testo):
@@ -202,20 +216,29 @@ def recupera_foto_e_titolo_completo(asin, desc_html):
         with urllib.request.urlopen(req, timeout=15) as resp:
             pagina = resp.read().decode("utf-8", errors="ignore")
 
-        m_h1 = re.search(r"<h2[^>]*>\s*<a[^>]*>([^<]+)</a>", pagina)
-        if m_h1:
-            t = html.unescape(m_h1.group(1)).strip()
-            if len(t) > 10:
+        m_title = re.search(r"<title>([^<]+)</title>", pagina, flags=re.IGNORECASE)
+        if m_title:
+            t = html.unescape(m_title.group(1)).split("|")[0].strip()
+            if len(t) > 12 and "camelcamelcamel" not in t.lower():
                 titolo_completo = t
+
+        m_og = re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']', pagina, flags=re.IGNORECASE)
+        if m_og and "amazon" in m_og.group(1):
+            candidati.extend(versioni_hd_amazon(m_og.group(1)))
 
         for m in re.finditer(r"https://(?:m\.media-amazon\.com|images-[a-z]+\.ssl-images-amazon\.com)/images/I/[^\"'\s<>]+", pagina):
             u = m.group(0)
             if "sprite" not in u.lower():
                 candidati.extend(versioni_hd_amazon(u))
     except Exception as e:
-        print(f"  Info pagina CCC non disponibile per {asin}: {e}")
+        print(f"  Pagina CCC non letta per {asin}: {e}")
 
-    candidati.append(f"https://images-eu.ssl-images-amazon.com/images/P/{asin}.01._SCLZZZZZZZ_.jpg")
+    # Fallback immagini Amazon per ASIN
+    candidati.extend([
+        f"https://images-eu.ssl-images-amazon.com/images/P/{asin}.01._SCLZZZZZZZ_.jpg",
+        f"https://images-na.ssl-images-amazon.com/images/P/{asin}.01._SCLZZZZZZZ_.jpg",
+        f"https://images-eu.ssl-images-amazon.com/images/P/{asin}.01.LZZZZZZZ.jpg",
+    ])
 
     visti = set()
     for url in candidati:
@@ -224,15 +247,14 @@ def recupera_foto_e_titolo_completo(asin, desc_html):
         visti.add(url)
         raw = scarica_immagine_valida(url)
         if raw:
-            print(f"  Foto trovata per {asin}: {url[:80]}")
+            print(f"  Foto OK per {asin}")
             return raw, titolo_completo
 
-    print(f"  Nessuna foto prodotto trovata per {asin}")
+    print(f"  Nessuna foto disponibile per {asin}")
     return None, titolo_completo
 
 
 def crea_scheda_grafica(raw_bytes):
-    """Monta la foto prodotto pulita su una scheda bianca 16:9."""
     canvas_w, canvas_h = 1200, 675
     sfondo = Image.new("RGBA", (canvas_w, canvas_h), (255, 255, 255, 255))
 
@@ -256,8 +278,10 @@ def scarica_offerte():
     offerte = []
     visti = set()
 
-    for url in FEED_URLS:
-        print(f"Controllo feed: {url}")
+    for idx_url, url in enumerate(FEED_URLS):
+        if idx_url > 0:
+            time.sleep(0.5)
+        print(f"Controllo feed {idx_url + 1}/{len(FEED_URLS)}: {url}")
         req = urllib.request.Request(url, headers=HEADERS_WEB)
         try:
             with urllib.request.urlopen(req, timeout=20) as resp:
@@ -273,7 +297,7 @@ def scarica_offerte():
             continue
 
         items = root.findall(".//item")
-        print(f"  Elementi trovati: {len(items)}")
+        trovati_feed = 0
 
         for item in items:
             titolo_grezzo = (item.findtext("title") or "").strip()
@@ -281,19 +305,24 @@ def scarica_offerte():
             guid = (item.findtext("guid") or "").strip()
             desc = (item.findtext("description") or "").strip()
 
-            titolo_pulito, sconto_pct, prezzo_nuovo, prezzo_vecchio = analizza_titolo_e_prezzi(titolo_grezzo, desc)
+            titolo_pulito, sconto_pct, risparmio, prezzo_nuovo, prezzo_vecchio = analizza_titolo_e_prezzi(titolo_grezzo, desc)
             valido, motivo = e_un_orologio(titolo_pulito)
-
-            if sconto_pct is not None and sconto_pct < SCONTO_MINIMO:
-                continue
             if not valido:
                 continue
+
+            # Controllo soglia sconto (% o €)
+            if sconto_pct is not None or risparmio is not None:
+                ok_pct = (sconto_pct is not None and sconto_pct >= SCONTO_MINIMO_PCT)
+                ok_eur = (risparmio is not None and risparmio >= RISPARMIO_MINIMO_EUR)
+                if not (ok_pct or ok_eur):
+                    continue
 
             asin = estrai_asin(f"{link} {guid} {desc}")
             if not asin or asin in visti:
                 continue
 
             visti.add(asin)
+            trovati_feed += 1
             offerte.append({
                 "asin": asin,
                 "titolo": titolo_pulito,
@@ -304,7 +333,9 @@ def scarica_offerte():
                 "motivo": motivo,
             })
 
-    print(f"Orologi validi dopo il filtro: {len(offerte)}")
+        print(f"  Elementi: {len(items)} | Orologi validi nuovi: {trovati_feed}")
+
+    print(f"Totale orologi unici candidati: {len(offerte)}")
     return offerte
 
 
@@ -385,16 +416,21 @@ def main():
 
     limite = 1 if test_grafica else MAX_POST_PER_GIRO
     nuovi_post = 0
+    saltati_gia_postati = 0
+    saltati_senza_foto = 0
 
     for off in offerte:
         if nuovi_post >= limite:
             break
         if not test_grafica and off["asin"] in pubblicati:
+            saltati_gia_postati += 1
             continue
 
         raw_img, titolo_pieno = recupera_foto_e_titolo_completo(off["asin"], off["desc"])
-        if not raw_img and SOLO_CON_FOTO:
-            continue
+        if not raw_img:
+            saltati_senza_foto += 1
+            if SOLO_CON_FOTO:
+                continue
 
         scheda_jpg = crea_scheda_grafica(raw_img)
         url_amazon = costruisci_link_amazon(off["asin"], amazon_tag)
@@ -424,11 +460,13 @@ def main():
                 pubblicati.append(off["asin"])
             nuovi_post += 1
 
+    print(
+        f"[{ora_italia()}] Riepilogo -> Pubblicati: {nuovi_post} | "
+        f"Già postati: {saltati_gia_postati} | Senza foto: {saltati_senza_foto}"
+    )
+
     if nuovi_post > 0:
         salva_pubblicati(pubblicati)
-        print(f"[{ora_italia()}] Completato: {nuovi_post} post con foto pubblicati.")
-    else:
-        print(f"[{ora_italia()}] Nessun nuovo post pubblicato (già postati o senza foto).")
 
 
 if __name__ == "__main__":
