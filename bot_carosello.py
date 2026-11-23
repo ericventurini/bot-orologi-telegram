@@ -147,40 +147,18 @@ def trova_marca(titolo, vendor=""):
     return trovata.title()
 
 
-def estrai_movimento(titolo, tags="", ptype=""):
-    """Riconosce il calibro/movimento principale per il badge sulla slide."""
-    testo = f"{titolo} {tags} {ptype}".lower()
-    is_auto = bool(re.search(r"\b(?:automatico|automatic|auto|powermatic|meccanico automatico)\b", testo))
-    is_chrono = bool(re.search(r"\b(?:cronografo|chronograph|chrono)\b", testo))
-
-    if is_auto and is_chrono:
-        return "AUTO CHRONO"
-    if re.search(r"\beco[\s\-]?drive\b", testo):
-        return "ECO-DRIVE"
-    if re.search(r"\b(?:tough solar|solare|solar)\b", testo):
-        return "SOLARE"
-    if re.search(r"\b(?:carica manuale|manual|mechanical|meccanico)\b", testo) and not is_auto:
-        return "CARICA MANUALE"
-    if is_auto:
-        return "AUTOMATICO"
-    if is_chrono:
-        return "CRONOGRAFO"
-    if re.search(r"\b(?:quarzo|quartz)\b", testo):
-        return "QUARZO"
-    if re.search(r"\bgmt\b", testo):
-        return "GMT"
-    return None
-
-
 def pulisci_titolo(titolo, marca=""):
     t = re.sub(r"\s+_([A-Za-z0-9])", r" \1", titolo or "")
     t = re.sub(r"\s*[|•]+\s*", " - ", t)
-    t = re.sub(r"\s+", " ", t).strip(" -|")
+    t = re.sub(r"\s+", " ", t).strip()
+    # Rimuove asterischi o simboli sporchi all'inizio (es. "*SEIKO - ...")
+    t = re.sub(r"^[\*\s\-:|]+", "", t)
     if marca:
         t = re.sub(r"^" + re.escape(marca) + r"\s*[-:|]?\s*", "", t, flags=re.IGNORECASE).strip()
     t = re.sub(r"^orologio\s+(?:uomo|donna|unisex)?\s*", "", t, flags=re.IGNORECASE).strip()
-    if marca and t.lower().startswith(marca.lower()):
-        t = t[len(marca):].lstrip(" -:|")
+    t = re.sub(r"^[\*\s\-:|]+", "", t)
+    if marca:
+        t = re.sub(r"^" + re.escape(marca) + r"\s*[-:|]?\s*", "", t, flags=re.IGNORECASE).strip()
     return t or (titolo or "").strip()
 
 
@@ -353,7 +331,7 @@ def scarica_immagine(url):
 
 
 # ==========================================
-# RACCOLTA MIGLIORI OFFERTE PER IL CAROSELLO
+# RACCOLTA MIGLIORI OFFERTE DELLA GIORNATA
 # ==========================================
 def raccogli_candidati(usati_set):
     candidati = []
@@ -391,8 +369,6 @@ def raccogli_candidati(usati_set):
                 handle = (prod.get("handle") or "").strip()
                 vendor = (prod.get("vendor") or "").strip()
                 ptype = (prod.get("product_type") or "").strip()
-                tags_raw = prod.get("tags", [])
-                tags = " ".join(tags_raw) if isinstance(tags_raw, list) else str(tags_raw)
 
                 if not titolo_raw or not handle:
                     continue
@@ -413,6 +389,12 @@ def raccogli_candidati(usati_set):
                 p_vecchio = parse_numero(v_ref.get("compare_at_price"))
                 if not p_nuovo or not p_vecchio or p_vecchio <= p_nuovo:
                     continue
+
+                # Normalizza in EUR già prima di confrontare i negozi tra loro
+                if val_sess == "USD" and tasso_sess and tasso_sess > 1.01:
+                    p_nuovo = round(p_nuovo / tasso_sess, 2)
+                    p_vecchio = round(p_vecchio / tasso_sess, 2)
+
                 if p_nuovo < PREZZO_MINIMO_EUR:
                     continue
 
@@ -428,15 +410,14 @@ def raccogli_candidati(usati_set):
 
                 pid = f"{nome_negozio}:{prod_id}"
                 gia_usato = pid in usati_set
-                movimento = estrai_movimento(titolo_raw, tags, ptype)
 
-                bonus_marca = 30.0 if marca.lower() in MARCHE_PRESTIGIO else 0.0
+                # Punteggio oggettivo puro: premia le vere migliori offerte della giornata
+                bonus_marca = 25.0 if marca.lower() in MARCHE_PRESTIGIO else 0.0
                 punteggio = (
                     bonus_marca
-                    + min(sconto_pct, 35.0) * 1.6
-                    + min(risparmio, 450.0) * 0.45
-                    + min(p_nuovo, 1500.0) * 0.03
-                    + random.uniform(0.0, 22.0)
+                    + min(sconto_pct, 45.0) * 2.2
+                    + min(risparmio, 600.0) * 0.45
+                    + min(p_nuovo, 1800.0) * 0.02
                 )
 
                 trovati += 1
@@ -445,7 +426,6 @@ def raccogli_candidati(usati_set):
                     "gia_usato": gia_usato,
                     "punteggio": punteggio,
                     "marca": marca,
-                    "movimento": movimento,
                     "titolo_breve": pulisci_titolo(titolo_raw, marca),
                     "titolo_raw": titolo_raw,
                     "prezzo_nuovo": p_nuovo,
@@ -463,7 +443,7 @@ def raccogli_candidati(usati_set):
 
 
 def seleziona_orologi_carosello(candidati, sessioni, quantita=3):
-    """Sceglie 3 orologi di 3 marchi diversi, verificando foto HD e prezzo reale in EUR."""
+    """Sceglie le 3 migliori offerte della giornata (3 marchi diversi), verificate in EUR."""
     candidati.sort(key=lambda x: (1 if x["gia_usato"] else 0, -x["punteggio"]))
 
     scelti = []
@@ -488,9 +468,8 @@ def seleziona_orologi_carosello(candidati, sessioni, quantita=3):
         verificato["raw_img"] = raw_img
         scelti.append(verificato)
         marche_usate.add(marca_k)
-        mov = f" [{verificato['movimento']}]" if verificato.get("movimento") else ""
         print(
-            f"  Scelto #{len(scelti)}: {verificato['marca']}{mov} | "
+            f"  Scelto #{len(scelti)}: {verificato['marca']} | "
             f"{verificato['prezzo_nuovo']}€ (era {verificato['prezzo_vecchio']}€, -{verificato['sconto_pct']:.0f}%)"
         )
 
@@ -544,7 +523,6 @@ def misura_testo(draw, testo, font):
 
 
 def ottieni_font_adattato(draw, testo, max_w, size_iniziale, size_min=26, bold=True):
-    """Riduce la dimensione del font solo se il testo supera la larghezza massima."""
     for sz in range(size_iniziale, size_min - 1, -2):
         fnt = ottieni_font(sz, bold=bold)
         tw, _ = misura_testo(draw, testo, fnt)
@@ -639,7 +617,6 @@ def jpg_bytes(img):
 
 
 def scegli_gancio_copertina(orologi):
-    """Genera un titolo dinamico basato sullo sconto e risparmio reale del giorno."""
     max_pct = max(it["sconto_pct"] for it in orologi)
     max_save = max(it["risparmio"] for it in orologi)
 
@@ -663,13 +640,11 @@ def genera_slide_copertina(orologi):
     f_badge = ottieni_font(25, bold=True)
     f_cta = ottieni_font(29, bold=True)
 
-    # Pill in alto
     disegna_pill(
         draw, f"RADAR OROLOGI  •  {data_italia()}", cx, 74, f_pill,
         COL_NAVY_CARD, COL_GOLD, pad_x=36, pad_y=13, outline=COL_GOLD_SOFT,
     )
 
-    # Titolo gancio dinamico (auto-adattato)
     riga1, riga2 = scegli_gancio_copertina(orologi)
     f_r1 = ottieni_font_adattato(draw, riga1, max_w=950, size_iniziale=64, size_min=44, bold=True)
     f_r2 = ottieni_font_adattato(draw, riga2, max_w=950, size_iniziale=62, size_min=44, bold=True)
@@ -679,7 +654,6 @@ def genera_slide_copertina(orologi):
 
     disegna_testo_centrato(draw, "Solo orologeria vera • Prezzi verificati in Euro", cx, 352, f_sub, COL_MUTED)
 
-    # 3 card anteprima affiancate (posizionate alte per lasciare margine TikTok in basso)
     card_w, card_h = 300, 445
     gap = 30
     start_x = (1080 - (card_w * 3 + gap * 2)) // 2
@@ -705,7 +679,6 @@ def genera_slide_copertina(orologi):
         sconto_txt = f"-{item['sconto_pct']:.0f}%"
         disegna_pill(draw, sconto_txt, x1 - 56, y0 - 20, f_badge, COL_RED, COL_WHITE, pad_x=18, pad_y=9)
 
-    # CTA swipe sopra la fascia coperta dalle didascalie TikTok
     disegna_pill(draw, "SCORRI PER VEDERE I PREZZI  >>>", cx, 958, f_cta, COL_GOLD, COL_NAVY, pad_x=46, pad_y=20)
     disegna_testo_centrato(draw, "Link diretti sul canale Telegram", cx, 1062, ottieni_font(25, bold=False), COL_MUTED)
 
@@ -718,7 +691,6 @@ def genera_slide_orologio(item, numero, totale=3):
 
     f_num = ottieni_font(28, bold=True)
     f_badge = ottieni_font(36, bold=True)
-    f_mov = ottieni_font(22, bold=True)
     f_title = ottieni_font(34, bold=True)
     f_old = ottieni_font(34, bold=False)
     f_new = ottieni_font(64, bold=True)
@@ -726,7 +698,7 @@ def genera_slide_orologio(item, numero, totale=3):
     f_store = ottieni_font(25, bold=False)
     f_foot = ottieni_font(22, bold=False)
 
-    # Intestazione compatta in alto
+    # Intestazione: numero a sinistra, marchio a destra
     draw.rounded_rectangle([70, 66, 208, 122], radius=24, fill=COL_NAVY_CARD, outline=COL_GOLD_SOFT, width=2)
     disegna_testo_centrato(draw, f"0{numero} / 0{totale}", 139, 77, f_num, COL_GOLD)
 
@@ -735,18 +707,9 @@ def genera_slide_orologio(item, numero, totale=3):
     bw, _ = misura_testo(draw, brand_txt, f_brand)
     draw.text((1010 - bw, 71), brand_txt, font=f_brand, fill=COL_WHITE)
 
-    # Card foto prodotto (alzata per margine di sicurezza TikTok)
+    # Card foto prodotto pulita (senza etichette extra sopra)
     card_box = (70, 152, 1010, 682)
     incolla_orologio_in_card(img, draw, item["raw_img"], card_box, radius=34, padding=34)
-
-    # Badge movimento in alto a sinistra dentro la card (se rilevato)
-    if item.get("movimento"):
-        mov_txt = item["movimento"]
-        mw, mh = misura_testo(draw, mov_txt, f_mov)
-        mx0, my0 = 96, 178
-        mx1, my1 = mx0 + mw + 34, my0 + mh + 20
-        draw.rounded_rectangle([mx0, my0, mx1, my1], radius=20, fill=COL_NAVY, outline=COL_GOLD_SOFT, width=2)
-        draw.text((mx0 + 17, my0 + 8), mov_txt, font=f_mov, fill=COL_GOLD)
 
     # Badge rosso sconto in alto a destra
     sconto_txt = f"-{item['sconto_pct']:.0f}%"
@@ -783,7 +746,6 @@ def genera_slide_orologio(item, numero, totale=3):
     draw.rounded_rectangle([sx0, sy0, sx1, sy1], radius=24, fill=COL_GREEN_BG)
     draw.text((sx0 + 21, sy0 + 12), save_str, font=f_save, fill=COL_GREEN_TXT)
 
-    # Negozio e indicatore swipe (tutto entro y=1135 per restare visibile su TikTok)
     disegna_testo_centrato(draw, f"Rivenditore autorizzato: {item['negozio']}", cx, 1054, f_store, COL_MUTED)
     footer_txt = "Radar Orologi & Offerte  •  Scorri >>>" if numero < totale else "Radar Orologi & Offerte  •  Link nell'ultima slide >>>"
     disegna_testo_centrato(draw, footer_txt, cx, 1102, f_foot, COL_GOLD_SOFT)
@@ -792,16 +754,13 @@ def genera_slide_orologio(item, numero, totale=3):
 
 
 def disegna_barra_ricerca_telegram(draw, handle_canale, y_top=758):
-    """Disegna una barra di ricerca Telegram pulita con lente e icona aeroplanino."""
     bx0, by0, bx1, by1 = 124, y_top, 956, y_top + 104
     draw.rounded_rectangle([bx0, by0, bx1, by1], radius=52, fill=COL_WHITE)
 
-    # Icona lente di ingrandimento a sinistra
     lcx, lcy = bx0 + 56, by0 + 48
     draw.ellipse([lcx - 16, lcy - 16, lcx + 16, lcy + 16], outline=COL_NAVY, width=5)
     draw.line([(lcx + 11, lcy + 11), (lcx + 24, lcy + 24)], fill=COL_NAVY, width=6)
 
-    # Cerchio blu Telegram con aeroplanino a destra
     tcx, tcy, tr = bx1 - 54, (by0 + by1) // 2, 34
     draw.ellipse([tcx - tr, tcy - tr, tcx + tr, tcy + tr], fill=COL_TG_BLUE)
     plane = [
@@ -813,7 +772,6 @@ def disegna_barra_ricerca_telegram(draw, handle_canale, y_top=758):
     draw.polygon(plane, fill=COL_WHITE)
     draw.line([(tcx + 14, tcy - 12), (tcx - 5, tcy + 4)], fill=COL_TG_BLUE, width=2)
 
-    # Testo @canale dentro la barra
     f_search = ottieni_font_adattato(draw, handle_canale, max_w=600, size_iniziale=38, size_min=24, bold=True)
     _, th = misura_testo(draw, handle_canale, f_search)
     draw.text((bx0 + 104, (by0 + by1 - th) // 2 - 4), handle_canale, font=f_search, fill=COL_NAVY)
@@ -850,13 +808,11 @@ def genera_slide_cta(handle_canale):
         draw.text((146, py), testo, font=f_item, fill=COL_WHITE)
         py += 66
 
-    # Box CTA con finta barra di ricerca Telegram (tutto sopra y=960)
     draw.rounded_rectangle([84, 678, 996, 956], radius=34, fill=COL_NAVY_CARD, outline=COL_GOLD, width=3)
     disegna_testo_centrato(draw, "CERCA IL CANALE SU TELEGRAM", cx, 710, f_label, COL_GOLD)
     disegna_barra_ricerca_telegram(draw, handle_canale, y_top=758)
     disegna_testo_centrato(draw, "Oppure clicca il link diretto in bio", cx, 892, f_bio, COL_WHITE)
 
-    # Domanda per commenti (entro y=1110, al riparo dalle scritte TikTok)
     disegna_testo_centrato(draw, "Quale dei 3 metteresti al polso? Scrivilo nei commenti", cx, 1006, f_note, COL_WHITE)
     disegna_testo_centrato(draw, "Salva il post per ritrovare questi modelli", cx, 1058, f_note, COL_MUTED)
 
@@ -938,9 +894,8 @@ def costruisci_didascalia_social(orologi, handle_canale):
     righe_modelli = []
     hashtag_marche = []
     for i, item in enumerate(orologi, start=1):
-        mov = f" ({item['movimento'].title()})" if item.get("movimento") else ""
         righe_modelli.append(
-            f"{i}. {item['marca']} {item['titolo_breve'][:45]}{mov} -> "
+            f"{i}. {item['marca']} {item['titolo_breve']} -> "
             f"{formatta_euro(item['prezzo_nuovo'])} anziché {formatta_euro(item['prezzo_vecchio'])} (-{item['sconto_pct']:.0f}%)"
         )
         tag_m = re.sub(r"[^a-z0-9]", "", item["marca"].lower())
@@ -987,7 +942,7 @@ def main():
     stato = carica_stato()
     usati_set = set(stato.get("usati", []))
 
-    print("1) Ricerca migliori offerte in Euro per il carosello...")
+    print("1) Ricerca migliori offerte in Euro della giornata...")
     candidati, sessioni = raccogli_candidati(usati_set)
     scelti = seleziona_orologi_carosello(candidati, sessioni, quantita=NUM_OROLOGI)
 
@@ -995,7 +950,7 @@ def main():
         print(f"Trovati solo {len(scelti)} orologi validi: annullo generazione carosello.")
         return
 
-    print("2) Generazione delle 5 slide grafiche (1080x1350 safe TikTok)...")
+    print("2) Generazione delle 5 slide grafiche (1080x1350)...")
     slides = [genera_slide_copertina(scelti)]
     for idx, item in enumerate(scelti, start=1):
         slides.append(genera_slide_orologio(item, idx, totale=NUM_OROLOGI))
