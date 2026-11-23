@@ -280,6 +280,52 @@ def costruisci_link_amazon(asin, tag):
     return base
 
 
+def estrai_codice_modello(testo):
+    """Cerca la referenza dell'orologio (es. H64655941, T137.407.11.041.00, SRPD55K1, GA-2100-1A1ER)."""
+    if not testo:
+        return None
+    tokens = re.findall(r"\b[A-Za-z0-9][A-Za-z0-9.\-]{4,22}\b", testo)
+    for tok in reversed(tokens):
+        pulito = tok.strip(".-")
+        if len(pulito) < 5:
+            continue
+        # Scarta misure (42mm, 100m, 10atm, 20bar) e parole lunghe tipo "Edition-2026"
+        if re.fullmatch(r"\d+(?:[.,]\d+)?(?:mm|cm|m|atm|bar|hz|g|gr|h|l|v)", pulito, flags=re.IGNORECASE):
+            continue
+        if re.search(r"[A-Za-z]{5,}", pulito):
+            continue
+        ha_lettere = bool(re.search(r"[A-Za-z]", pulito))
+        num_cifre = len(re.findall(r"\d", pulito))
+        if ha_lettere and num_cifre >= 2:
+            return pulito
+    return None
+
+
+def costruisci_link_ricerca_amazon(titolo, marca, sku, tag):
+    """Genera il link di ricerca su Amazon.it con codice modello (o nome pulito) + tag affiliato."""
+    codice = estrai_codice_modello(titolo) or estrai_codice_modello(sku)
+    if codice:
+        if marca and marca.lower() not in codice.lower():
+            query = f"{marca} {codice}"
+        else:
+            query = codice
+    else:
+        pulito = re.sub(r"[|•/]+", " ", titolo or "")
+        pulito = re.sub(r"\s+", " ", pulito).strip()
+        parole = [
+            p for p in pulito.split()
+            if p.lower() not in ("orologio", "orologi", "uomo", "donna", "unisex", "-")
+        ]
+        query = " ".join(parole[:6]).strip()
+        if marca and marca.lower() not in query.lower():
+            query = f"{marca} {query}".strip()
+
+    base = f"https://www.amazon.it/s?k={urllib.parse.quote_plus(query)}"
+    if tag:
+        return f"{base}&tag={urllib.parse.quote(tag)}"
+    return base
+
+
 def versioni_hd_amazon(url):
     candidati = []
     hd = re.sub(r"\._[^/]+_\.(jpg|jpeg|png|webp)", r"._AC_SL1000_.\1", url, flags=re.IGNORECASE)
@@ -465,10 +511,11 @@ def raccogli_da_ccc(asin_gia_postati, forza_test=False):
             trovati += 1
             candidati.append({
                 "tipo": "AMAZON",
-                "priorita": 3,
+                "priorita": 1,
                 "id_univoco": asin,
                 "titolo": titolo_pulito,
                 "marca": "Amazon",
+                "sku": "",
                 "prezzo_nuovo": p_nuovo,
                 "prezzo_vecchio": p_vecchio,
                 "sconto_pct": sconto_pct,
@@ -577,10 +624,11 @@ def raccogli_da_pepper(asin_gia_postati, forza_test=False):
             trovati += 1
             candidati.append({
                 "tipo": "AMAZON",
-                "priorita": 3,
+                "priorita": 1,
                 "id_univoco": asin,
                 "titolo": titolo,
                 "marca": "Amazon",
+                "sku": "",
                 "prezzo_nuovo": p_nuovo,
                 "prezzo_vecchio": None,
                 "sconto_pct": None,
@@ -706,10 +754,10 @@ def raccogli_da_radar(stato, forza_test=False):
 
                 if not prima_volta and era_noto and not era_disponibile:
                     tipo_evento = "RADAR_RESTOCK"
-                    priorita = 1
+                    priorita = 2
                 elif not prima_volta and not era_noto:
                     tipo_evento = "RADAR_DROP"
-                    priorita = 2
+                    priorita = 3
                 elif is_sconto and (forza_test or pid not in radar_postati):
                     tipo_evento = "RADAR_SCONTO"
                     priorita = 4
@@ -727,6 +775,7 @@ def raccogli_da_radar(stato, forza_test=False):
                         "id_univoco": pid,
                         "titolo": titolo,
                         "marca": marca,
+                        "sku": (v_ref.get("sku") or "").strip(),
                         "prezzo_nuovo": p_nuovo,
                         "prezzo_vecchio": p_vecchio if is_sconto else None,
                         "sconto_pct": sconto_pct if is_sconto else None,
@@ -750,7 +799,7 @@ def raccogli_da_radar(stato, forza_test=False):
 # ORDINAMENTO + MESCOLAMENTO PER MARCHIO
 # ==========================================
 def ordina_e_mescola_candidati(candidati):
-    """Mantiene le priorità, ma mescola a caso e alterna marchi diversi nello stesso giro."""
+    """Priorità: Amazon -> Restock -> Drop -> Sconti -> Limited, alternando marchi diversi."""
     candidati.sort(key=lambda x: x["priorita"])
     unici = []
     visti_id = set()
@@ -774,7 +823,6 @@ def ordina_e_mescola_candidati(candidati):
         for m in marche:
             random.shuffle(gruppi_marca[m])
 
-        # Alterna 1 orologio per ogni marchio disponibile prima di ripeterne uno
         while any(gruppi_marca[m] for m in marche):
             for m in marche:
                 if gruppi_marca[m]:
@@ -786,13 +834,9 @@ def ordina_e_mescola_candidati(candidati):
 # ==========================================
 # INVIO TELEGRAM
 # ==========================================
-def invia_foto_su_telegram(token, channel, caption_html, testo_bottone, url_bottone, image_bytes):
+def invia_foto_su_telegram(token, channel, caption_html, bottoni, image_bytes):
     boundary = f"----TelegramBotBoundary{uuid.uuid4().hex}"
-    tastiera = json.dumps({
-        "inline_keyboard": [[
-            {"text": testo_bottone, "url": url_bottone}
-        ]]
-    })
+    tastiera = json.dumps({"inline_keyboard": bottoni})
 
     fields = {
         "chat_id": channel,
@@ -834,7 +878,7 @@ def invia_foto_su_telegram(token, channel, caption_html, testo_bottone, url_bott
         return False
 
 
-def formatta_messaggio(item, url_finale, titolo_finale):
+def formatta_messaggio(item, url_finale, titolo_finale, amazon_tag=""):
     titolo_esc = html.escape(titolo_finale)
     url_esc = html.escape(url_finale, quote=True)
     negozio_esc = html.escape(item["negozio"])
@@ -863,7 +907,8 @@ def formatta_messaggio(item, url_finale, titolo_finale):
             f"👉 <a href=\"{url_esc}\">Apri su Amazon</a>\n\n"
             f"⌚ Segnalata su {canale_esc} - #Ad"
         )
-        return caption, "⌚ Apri su Amazon"
+        bottoni = [[{"text": "⌚ Apri su Amazon", "url": url_finale}]]
+        return caption, bottoni
 
     badge_map = {
         "RADAR_RESTOCK": f"🔥 <b>RESTOCK DISPONIBILE — {marca_esc}</b>",
@@ -873,14 +918,26 @@ def formatta_messaggio(item, url_finale, titolo_finale):
     }
     badge = badge_map.get(item["tipo"], f"⌚ <b>{marca_esc}</b>")
 
+    url_amazon_cerca = costruisci_link_ricerca_amazon(
+        titolo_finale,
+        item.get("marca") or "",
+        item.get("sku") or "",
+        amazon_tag,
+    )
+    suffisso_ad = " - #Ad" if amazon_tag else ""
+
     caption = (
         f"{badge}\n\n"
         f"⌚ <i>{titolo_esc}</i>\n\n"
         f"{riga_prezzo}\n"
         f"👉 <a href=\"{url_esc}\">Vedi su {negozio_esc}</a>\n\n"
-        f"⌚ Segnalata su {canale_esc}"
+        f"⌚ Segnalata su {canale_esc}{suffisso_ad}"
     )
-    return caption, f"⌚ Vedi su {item['negozio']}"
+    bottoni = [
+        [{"text": f"⌚ Vedi su {item['negozio']}", "url": url_finale}],
+        [{"text": "🛒 Cerca su Amazon", "url": url_amazon_cerca}],
+    ]
+    return caption, bottoni
 
 
 def main():
@@ -906,7 +963,7 @@ def main():
     candidati.extend(candidati_radar)
 
     unici = ordina_e_mescola_candidati(candidati)
-    print(f"Candidati totali pronti (mescolati per marchio): {len(unici)}")
+    print(f"Candidati totali pronti (priorità Amazon + mescolati): {len(unici)}")
 
     limite = 1 if forza_test else MAX_POST_PER_GIRO
     pubblicati_ora = 0
@@ -930,9 +987,9 @@ def main():
             continue
 
         scheda_jpg = crea_scheda_grafica(raw_img)
-        caption, testo_bottone = formatta_messaggio(item, url_finale, titolo_finale)
+        caption, bottoni = formatta_messaggio(item, url_finale, titolo_finale, amazon_tag)
 
-        if invia_foto_su_telegram(token, channel, caption, testo_bottone, url_finale, scheda_jpg):
+        if invia_foto_su_telegram(token, channel, caption, bottoni, scheda_jpg):
             print(f"Pubblicato [{item['tipo']} - {item.get('marca')}]: {titolo_finale[:60]}")
             if item["tipo"] == "AMAZON":
                 if item["id_univoco"] not in stato["asin"]:
