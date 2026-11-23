@@ -1,0 +1,39 @@
+name: Generatore Caroselli Social
+
+on:
+  schedule:
+    - cron: '0 17 * * *' # Ogni giorno alle 18:00 ora italiana
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  genera-carosello:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Scarica repository
+        uses: actions/checkout@v4
+
+      - name: Configura Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Installa Pillow
+        run: pip install pillow
+
+      - name: Genera e invia carosello su Telegram
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_ADMIN_ID: ${{ secrets.TELEGRAM_ADMIN_ID }}
+          TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
+        run: python bot_carosello.py
+
+      - name: Salva storico orologi usati nei caroselli
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add caroselli_stato.json
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Aggiorna storico caroselli" && git push)
