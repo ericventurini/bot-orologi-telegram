@@ -14,49 +14,98 @@ from zoneinfo import ZoneInfo
 from PIL import Image, ImageDraw
 
 # ==========================================
-# BOT OFFERTE OROLOGI AMAZON -> TELEGRAM
+# BOT OROLOGI 3-IN-1: AMAZON + PEPPER + RADAR
 # ==========================================
-FILE_PUBBLICATI = "pubblicati.json"
+FILE_STATO = "pubblicati.json"
 NOME_CANALE = "Radar Orologi & Offerte"
 MAX_POST_PER_GIRO = 2             # Massimo 2 post ogni 30 min
-MAX_STORICO = 500
-SCONTO_MINIMO_PCT = 6.0           # Pubblica se sconto >= 6%...
-RISPARMIO_MINIMO_EUR = 10.0       # ...oppure se il calo è >= 10€
-SOLO_CON_FOTO = True              # Non pubblica mai post senza foto
+MAX_STORICO_ASIN = 500
+MAX_STORICO_RADAR = 500
 
-FEED_URLS = [
-    # Categoria Orologi (1g, 30g, top %, top €, popolari in offerta)
-    "https://it.camelcamelcamel.com/top_drops/feed?t=recent&s=relative&i=1&bn=orologi&d=1",
-    "https://it.camelcamelcamel.com/top_drops/feed?t=recent&s=relative&i=30&bn=orologi&d=1",
-    "https://it.camelcamelcamel.com/top_drops/feed?t=relative&s=relative&i=30&bn=orologi&d=1",
-    "https://it.camelcamelcamel.com/top_drops/feed?t=absolute&s=absolute&i=30&bn=orologi&d=1",
-    "https://it.camelcamelcamel.com/popular.xml?deal=1&bn=orologi",
-    # Categoria Moda (dove Amazon.it inserisce gran parte degli orologi)
+# Soglie offerte Amazon
+SCONTO_MINIMO_AMAZON_PCT = 6.0
+RISPARMIO_MINIMO_AMAZON_EUR = 10.0
+
+# Soglie Radar rivenditori ufficiali / brand
+SCONTO_MINIMO_RADAR_PCT = 10.0    # Sconti reali dal 10% in su (su Tissot/Seiko/Hamilton sono ottimi)
+PREZZO_MINIMO_RADAR = 35.0        # Copre anche Casio/G-Shock ma evita piccoli ricambi
+MAX_LIMITED_CATALOGO_PER_FONTE = 2
+
+# 1) Feed CamelCamelCamel (solo 3 con pausa -> zero errori 429)
+CCC_FEED_URLS = [
+    "https://it.camelcamelcamel.com/top_drops/feed?t=recent&s=relative&i=7&bn=orologi&d=1",
     "https://it.camelcamelcamel.com/top_drops/feed?t=recent&s=relative&i=1&bn=moda&d=1",
-    "https://it.camelcamelcamel.com/top_drops/feed?t=recent&s=relative&i=30&bn=moda&d=1",
-    "https://it.camelcamelcamel.com/top_drops/feed?t=absolute&s=absolute&i=30&bn=moda&d=1",
-    "https://it.camelcamelcamel.com/popular.xml?deal=1&bn=moda",
-    # Categoria Elettronica (smartwatch e sportwatch) + globale 24h
     "https://it.camelcamelcamel.com/top_drops/feed?t=recent&s=relative&i=1&bn=elettronica&d=1",
-    "https://it.camelcamelcamel.com/popular.xml?deal=1&bn=elettronica",
-    "https://it.camelcamelcamel.com/top_drops/feed?t=recent&s=relative&i=1&d=1",
 ]
 
-PAROLE_OROLOGI = [
+# 2) Feed Pepper.it (offerte Amazon.it segnalate dagli utenti)
+PEPPER_FEED_URLS = [
+    "https://www.pepper.it/rss/search?q=seiko",
+    "https://www.pepper.it/rss/search?q=casio",
+    "https://www.pepper.it/rss/search?q=citizen",
+    "https://www.pepper.it/rss/search?q=tissot",
+    "https://www.pepper.it/rss/search?q=hamilton",
+    "https://www.pepper.it/rss/search?q=orologio",
+]
+
+# 3) Radar: D1 Milano + Baltic + Rivenditori autorizzati italiani (Hamilton, Tissot, Seiko, Citizen, Casio)
+RADAR_FONTI = [
+    {
+        "negozio": "D1 Milano",
+        "base_url": "https://d1milano.com",
+        "collezioni": [""],
+        "filtra_marche": False,
+        "valuta": "€",
+    },
+    {
+        "negozio": "Baltic",
+        "base_url": "https://baltic-watches.com",
+        "collezioni": [""],
+        "filtra_marche": False,
+        "valuta": "€",
+    },
+    {
+        "negozio": "Orafo La Morgia",
+        "base_url": "https://www.orafolamorgia.it",
+        "collezioni": ["hamilton", "tissot", "seiko"],
+        "filtra_marche": True,
+        "valuta": "€",
+    },
+    {
+        "negozio": "Ferrari Luca Gioielli",
+        "base_url": "https://ferrarilucagioielli.it",
+        "collezioni": ["hamilton", "tissot", "seiko", "citizen", "orologi-casio"],
+        "filtra_marche": True,
+        "valuta": "€",
+    },
+    {
+        "negozio": "2B Gioielli",
+        "base_url": "https://2bgioielli.it",
+        "collezioni": ["orologi-eleganti", "citizen", "orologi"],
+        "filtra_marche": True,
+        "valuta": "€",
+    },
+]
+
+# Marchi ammessi dal Radar sui rivenditori multimarca (niente paccottiglia)
+MARCHE_TOP_RADAR = [
+    "hamilton", "tissot", "seiko", "casio", "g-shock", "gshock", "edifice",
+    "citizen", "orient", "bulova", "longines", "mido", "certina", "oris",
+    "frederique constant", "eberhard", "tag heuer", "tudor", "omega",
+    "d1 milano", "baltic", "swatch", "timex", "garmin", "suunto",
+]
+
+# Marchi/parole valide per Amazon e Pepper
+PAROLE_OROLOGI_AMAZON = [
+    "seiko", "casio", "g-shock", "gshock", "edifice", "citizen", "orient",
+    "tissot", "hamilton", "timex", "bulova", "swatch", "longines", "mido",
+    "certina", "oris", "frederique constant", "d1 milano", "baltic",
+    "suunto", "garmin", "polar", "mondaine", "junghans", "glycine",
+    "festina", "sector", "breil", "locman", "philip watch", "bering",
     "orologio", "orologi", "cronografo", "chronograph", "smartwatch",
-    "sportwatch", "wristwatch", "montre", "uhren", "watch",
-    "seiko", "casio", "g-shock", "gshock", "edifice", "baby-g", "citizen",
-    "orient", "tissot", "hamilton", "timex", "bulova", "festina", "sector",
-    "swatch", "breil", "locman", "philip watch", "invicta", "longines",
-    "mido", "certina", "spinnaker", "pagani design", "steeldive",
-    "san martin", "cadisen", "mondaine", "suunto", "amazfit", "coros",
-    "polar", "garmin", "fossil", "maserati", "morellato", "lorus", "skagen",
-    "bering", "nixon", "lotus", "viceroy", "daniel wellington", "cluse",
-    "ice-watch", "chronostar", "d1 milano", "zeppelin", "vostok", "junghans",
-    "glycine", "candino", "jaguar", "movado",
 ]
 
-PAROLE_VIETATE = [
+PAROLE_VIETATE_AMAZON = [
     "compatibile con", "cinturino per", "cinturini per",
     "cinturino di ricambio", "cinturino compatibile", "cinturini compatibili",
     "vetro temperato", "pellicola", "protezione schermo", "screen protector",
@@ -71,6 +120,27 @@ PAROLE_VIETATE = [
     "pantaloni", "sneakers", "jeans", "camicia", "mutande", "boxer", "calzini",
     "iphone", "ipad", "airpods", "attrezzi", "ps4", "ps5", "xbox", "nintendo",
     "dvd", "blu-ray", "cuffie", "auricolari",
+]
+
+# Blocca gioielli e accessori sui siti delle gioiellerie
+PAROLE_VIETATE_RADAR = [
+    "strap", "straps", "cinturino", "cinturini", "buckle", "clasp", "fibbia",
+    "pouch", "watch roll", "roll", "travel case", "scatola", "astuccio",
+    "tool", "spring bar", "bezel insert", "link", "links", "maglia",
+    "collana", "collane", "anello", "anelli", "fedina", "solitario", "trilogy",
+    "orecchini", "orecchino", "bracciale", "bracciali", "ciondolo", "charm",
+    "pendente", "gemelli", "spilla", "pandora", "dodo", "miluna", "stroili",
+    "cap", "hat", "t-shirt", "shirt", "hoodie", "jacket", "gift card",
+    "voucher", "buono regalo", "book", "magazine", "poster", "print",
+    "accessory", "accessories", "accessori", "servicing", "warranty",
+    "polishing", "cloth", "wallet", "portafoglio", "keyring", "portachiavi",
+    "stand", "sveglia", "parete", "muro",
+]
+
+PAROLE_LIMITED = [
+    "limited", "edition", "edizione limitata", "special edition",
+    "numbered", "collab", "collaboration", "exclusive", "esclusiva",
+    "anniversary", "collector", "capsule", "murph", "alpinist",
 ]
 
 HEADERS_WEB = {
@@ -91,39 +161,92 @@ def ora_italia():
         return datetime.now().strftime("%d/%m/%Y %H:%M")
 
 
-def carica_pubblicati():
-    if os.path.exists(FILE_PUBBLICATI):
-        with open(FILE_PUBBLICATI, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return []
+def carica_stato():
+    base = {
+        "asin": [],
+        "radar_postati": [],
+        "radar_stock": {},
+        "radar_inizializzati": [],
+    }
+    if not os.path.exists(FILE_STATO):
+        return base
+    try:
+        with open(FILE_STATO, "r", encoding="utf-8") as f:
+            dati = json.load(f)
+        if isinstance(dati, list):
+            base["asin"] = dati
+            return base
+        if isinstance(dati, dict):
+            base["asin"] = dati.get("asin", [])
+            base["radar_postati"] = dati.get("radar_postati", [])
+            base["radar_stock"] = dati.get("radar_stock", {})
+            base["radar_inizializzati"] = dati.get("radar_inizializzati", [])
+            return base
+    except Exception as e:
+        print(f"Errore lettura {FILE_STATO}: {e}")
+    return base
 
 
-def salva_pubblicati(lista):
-    with open(FILE_PUBBLICATI, "w", encoding="utf-8") as f:
-        json.dump(lista[-MAX_STORICO:], f, indent=2)
+def salva_stato(stato):
+    stato["asin"] = stato["asin"][-MAX_STORICO_ASIN:]
+    stato["radar_postati"] = stato["radar_postati"][-MAX_STORICO_RADAR:]
+    with open(FILE_STATO, "w", encoding="utf-8") as f:
+        json.dump(stato, f, indent=2, ensure_ascii=False)
 
 
 def contiene_parola(testo, lista_parole):
     for parola in lista_parole:
-        if re.search(r"\b" + re.escape(parola) + r"\b", testo, flags=re.IGNORECASE):
+        if re.search(r"\b" + re.escape(parola.strip()) + r"\b", testo, flags=re.IGNORECASE):
             return parola
     return None
 
 
-def e_un_orologio(titolo):
-    vietata = contiene_parola(titolo, PAROLE_VIETATE)
+def e_un_orologio_amazon(titolo):
+    vietata = contiene_parola(titolo, PAROLE_VIETATE_AMAZON)
     if vietata:
         return False, f"scartato per '{vietata}'"
-    trovata = contiene_parola(titolo, PAROLE_OROLOGI)
+    trovata = contiene_parola(titolo, PAROLE_OROLOGI_AMAZON)
     if trovata:
         return True, f"ok ('{trovata}')"
     return False, "non è un orologio"
 
 
-def parse_euro(testo):
-    s = testo.strip().replace("€", "").strip()
+def e_accessorio_o_gioiello(titolo, product_type=""):
+    testo = f"{titolo} {product_type}".strip()
+    return contiene_parola(testo, PAROLE_VIETATE_RADAR) is not None
+
+
+def trova_marca_top(titolo, vendor=""):
+    testo = f"{vendor} {titolo}".strip()
+    trovata = contiene_parola(testo, MARCHE_TOP_RADAR)
+    if not trovata:
+        return None
+    if trovata.lower() in ("g-shock", "gshock"):
+        return "Casio G-Shock"
+    if trovata.lower() == "d1 milano":
+        return "D1 Milano"
+    return trovata.title()
+
+
+def e_edizione_limitata(titolo, tags=""):
+    testo = f"{titolo} {tags}".lower()
+    for p in PAROLE_LIMITED:
+        if p in testo:
+            return True
+    return False
+
+
+def parse_numero(testo):
+    if testo is None:
+        return None
+    s = str(testo).strip().replace("€", "").replace("$", "").strip()
+    if not s:
+        return None
     if "," in s and "." in s:
-        s = s.replace(".", "").replace(",", ".")
+        if s.rfind(",") > s.rfind("."):
+            s = s.replace(".", "").replace(",", ".")
+        else:
+            s = s.replace(",", "")
     elif "," in s:
         s = s.replace(",", ".")
     try:
@@ -132,50 +255,28 @@ def parse_euro(testo):
         return None
 
 
-def formatta_euro(valore):
-    return f"{valore:,.2f}€".replace(",", "X").replace(".", ",").replace("X", ".")
-
-
-def analizza_titolo_e_prezzi(titolo_grezzo, desc_html=""):
-    testo_completo = f"{titolo_grezzo} {html.unescape(desc_html or '')}"
-
-    # Supporta sia "down 15% (20€)" sia "down 20€ (15%)"
-    sconto_pct = None
-    m_pct = re.search(r"(?:down\s+|\()([\d.,]+)%", testo_completo, flags=re.IGNORECASE)
-    if m_pct:
-        sconto_pct = parse_euro(m_pct.group(1))
-
-    risparmio = None
-    m_risp = re.search(r"(?:down\s+|\()([\d.,]+)\s*€", testo_completo, flags=re.IGNORECASE)
-    if m_risp:
-        risparmio = parse_euro(m_risp.group(1))
-
-    prezzo_nuovo = None
-    m_nuovo = re.search(r"\bto\s+([\d.,]+)\s*€", testo_completo, flags=re.IGNORECASE)
-    if m_nuovo:
-        prezzo_nuovo = parse_euro(m_nuovo.group(1))
-
-    prezzo_vecchio = None
-    m_vecchio = re.search(r"\bfrom\s+([\d.,]+)\s*€", testo_completo, flags=re.IGNORECASE)
-    if m_vecchio:
-        prezzo_vecchio = parse_euro(m_vecchio.group(1))
-
-    if prezzo_nuovo is not None and prezzo_vecchio is None and risparmio is not None:
-        prezzo_vecchio = round(prezzo_nuovo + risparmio, 2)
-
-    if sconto_pct is None and prezzo_nuovo and prezzo_vecchio and prezzo_vecchio > prezzo_nuovo:
-        sconto_pct = round(((prezzo_vecchio - prezzo_nuovo) / prezzo_vecchio) * 100.0, 2)
-
-    titolo_pulito = re.split(r"\s*-\s*down\s+", titolo_grezzo, maxsplit=1, flags=re.IGNORECASE)[0].strip()
-    return titolo_pulito, sconto_pct, risparmio, prezzo_nuovo, prezzo_vecchio
+def formatta_prezzo(valore, valuta="€"):
+    num = f"{valore:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    if valuta == "$":
+        return f"${num}"
+    return f"{num}€"
 
 
 def estrai_asin(testo):
+    if not testo:
+        return None
     m = re.search(r"/(?:product|dp|gp/product)/([A-Z0-9]{10})", testo)
     if m:
         return m.group(1)
     m = re.search(r"\b(B0[A-Z0-9]{8})\b", testo)
     return m.group(1) if m else None
+
+
+def costruisci_link_amazon(asin, tag):
+    base = f"https://www.amazon.it/dp/{asin}"
+    if tag:
+        return f"{base}?tag={urllib.parse.quote(tag)}"
+    return base
 
 
 def versioni_hd_amazon(url):
@@ -188,6 +289,8 @@ def versioni_hd_amazon(url):
 
 
 def scarica_immagine_valida(url):
+    if not url:
+        return None
     req = urllib.request.Request(url, headers=HEADERS_WEB)
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
@@ -202,9 +305,12 @@ def scarica_immagine_valida(url):
         return None
 
 
-def recupera_foto_e_titolo_completo(asin, desc_html):
+def recupera_foto_amazon(asin, desc_html="", extra_img=None):
     candidati = []
     titolo_completo = None
+
+    if extra_img:
+        candidati.append(extra_img)
 
     desc_pulita = html.unescape(desc_html or "")
     for m in re.finditer(r"https://(?:m\.media-amazon\.com|images-[a-z]+\.ssl-images-amazon\.com)/images/I/[^\"'\s<>]+", desc_pulita):
@@ -230,10 +336,9 @@ def recupera_foto_e_titolo_completo(asin, desc_html):
             u = m.group(0)
             if "sprite" not in u.lower():
                 candidati.extend(versioni_hd_amazon(u))
-    except Exception as e:
-        print(f"  Pagina CCC non letta per {asin}: {e}")
+    except Exception:
+        pass
 
-    # Fallback immagini Amazon per ASIN
     candidati.extend([
         f"https://images-eu.ssl-images-amazon.com/images/P/{asin}.01._SCLZZZZZZZ_.jpg",
         f"https://images-na.ssl-images-amazon.com/images/P/{asin}.01._SCLZZZZZZZ_.jpg",
@@ -242,19 +347,18 @@ def recupera_foto_e_titolo_completo(asin, desc_html):
 
     visti = set()
     for url in candidati:
-        if url in visti:
+        if not url or url in visti:
             continue
         visti.add(url)
         raw = scarica_immagine_valida(url)
         if raw:
-            print(f"  Foto OK per {asin}")
             return raw, titolo_completo
 
-    print(f"  Nessuna foto disponibile per {asin}")
     return None, titolo_completo
 
 
 def crea_scheda_grafica(raw_bytes):
+    """Monta la foto prodotto pulita su una scheda bianca 16:9 senza logo."""
     canvas_w, canvas_h = 1200, 675
     sfondo = Image.new("RGBA", (canvas_w, canvas_h), (255, 255, 255, 255))
 
@@ -274,83 +378,381 @@ def crea_scheda_grafica(raw_bytes):
     return output.getvalue()
 
 
-def scarica_offerte():
-    offerte = []
-    visti = set()
+# ==========================================
+# FONTE 1: CAMELCAMELCAMEL (AMAZON.IT)
+# ==========================================
+def analizza_titolo_ccc(titolo_grezzo, desc_html=""):
+    testo = f"{titolo_grezzo} {html.unescape(desc_html or '')}"
 
-    for idx_url, url in enumerate(FEED_URLS):
-        if idx_url > 0:
-            time.sleep(0.5)
-        print(f"Controllo feed {idx_url + 1}/{len(FEED_URLS)}: {url}")
+    sconto_pct = None
+    m_pct = re.search(r"(?:down\s+|\()([\d.,]+)%", testo, flags=re.IGNORECASE)
+    if m_pct:
+        sconto_pct = parse_numero(m_pct.group(1))
+
+    risparmio = None
+    m_risp = re.search(r"(?:down\s+|\()([\d.,]+)\s*€", testo, flags=re.IGNORECASE)
+    if m_risp:
+        risparmio = parse_numero(m_risp.group(1))
+
+    prezzo_nuovo = None
+    m_nuovo = re.search(r"\bto\s+([\d.,]+)\s*€", testo, flags=re.IGNORECASE)
+    if m_nuovo:
+        prezzo_nuovo = parse_numero(m_nuovo.group(1))
+
+    prezzo_vecchio = None
+    m_vecchio = re.search(r"\bfrom\s+([\d.,]+)\s*€", testo, flags=re.IGNORECASE)
+    if m_vecchio:
+        prezzo_vecchio = parse_numero(m_vecchio.group(1))
+
+    if prezzo_nuovo is not None and prezzo_vecchio is None and risparmio is not None:
+        prezzo_vecchio = round(prezzo_nuovo + risparmio, 2)
+
+    if sconto_pct is None and prezzo_nuovo and prezzo_vecchio and prezzo_vecchio > prezzo_nuovo:
+        sconto_pct = round(((prezzo_vecchio - prezzo_nuovo) / prezzo_vecchio) * 100.0, 2)
+
+    titolo_pulito = re.split(r"\s*-\s*down\s+", titolo_grezzo, maxsplit=1, flags=re.IGNORECASE)[0].strip()
+    return titolo_pulito, sconto_pct, risparmio, prezzo_nuovo, prezzo_vecchio
+
+
+def raccogli_da_ccc(asin_gia_postati, forza_test=False):
+    candidati = []
+    visti = set()
+    print("--- [1/3] Controllo CamelCamelCamel Italia ---")
+
+    for idx, url in enumerate(CCC_FEED_URLS):
+        if idx > 0:
+            time.sleep(3.0)
         req = urllib.request.Request(url, headers=HEADERS_WEB)
         try:
             with urllib.request.urlopen(req, timeout=20) as resp:
                 xml_data = resp.read()
         except Exception as e:
-            print(f"  Errore feed: {e}")
+            print(f"  CCC feed {idx + 1} errore: {e}")
             continue
 
         try:
             root = ET.fromstring(xml_data)
-        except ET.ParseError as e:
-            print(f"  Errore XML: {e}")
+        except ET.ParseError:
             continue
 
         items = root.findall(".//item")
-        trovati_feed = 0
-
+        trovati = 0
         for item in items:
             titolo_grezzo = (item.findtext("title") or "").strip()
             link = (item.findtext("link") or "").strip()
             guid = (item.findtext("guid") or "").strip()
             desc = (item.findtext("description") or "").strip()
 
-            titolo_pulito, sconto_pct, risparmio, prezzo_nuovo, prezzo_vecchio = analizza_titolo_e_prezzi(titolo_grezzo, desc)
-            valido, motivo = e_un_orologio(titolo_pulito)
+            titolo_pulito, sconto_pct, risparmio, p_nuovo, p_vecchio = analizza_titolo_ccc(titolo_grezzo, desc)
+            valido, _ = e_un_orologio_amazon(titolo_pulito)
             if not valido:
                 continue
 
-            # Controllo soglia sconto (% o €)
             if sconto_pct is not None or risparmio is not None:
-                ok_pct = (sconto_pct is not None and sconto_pct >= SCONTO_MINIMO_PCT)
-                ok_eur = (risparmio is not None and risparmio >= RISPARMIO_MINIMO_EUR)
+                ok_pct = sconto_pct is not None and sconto_pct >= SCONTO_MINIMO_AMAZON_PCT
+                ok_eur = risparmio is not None and risparmio >= RISPARMIO_MINIMO_AMAZON_EUR
                 if not (ok_pct or ok_eur):
                     continue
 
             asin = estrai_asin(f"{link} {guid} {desc}")
             if not asin or asin in visti:
                 continue
+            if not forza_test and asin in asin_gia_postati:
+                continue
 
             visti.add(asin)
-            trovati_feed += 1
-            offerte.append({
-                "asin": asin,
+            trovati += 1
+            candidati.append({
+                "tipo": "AMAZON",
+                "priorita": 3,
+                "id_univoco": asin,
                 "titolo": titolo_pulito,
+                "marca": "Amazon",
+                "prezzo_nuovo": p_nuovo,
+                "prezzo_vecchio": p_vecchio,
                 "sconto_pct": sconto_pct,
-                "prezzo_nuovo": prezzo_nuovo,
-                "prezzo_vecchio": prezzo_vecchio,
-                "desc": desc,
-                "motivo": motivo,
+                "valuta": "€",
+                "desc_html": desc,
+                "img_url": None,
+                "negozio": "Amazon",
             })
 
-        print(f"  Elementi: {len(items)} | Orologi validi nuovi: {trovati_feed}")
+        print(f"  CCC feed {idx + 1}: {len(items)} elementi | {trovati} nuovi orologi")
 
-    print(f"Totale orologi unici candidati: {len(offerte)}")
-    return offerte
-
-
-def costruisci_link_amazon(asin, tag):
-    base = f"https://www.amazon.it/dp/{asin}"
-    if tag:
-        return f"{base}?tag={urllib.parse.quote(tag)}"
-    return base
+    return candidati
 
 
-def invia_foto_su_telegram(token, channel, caption_html, url_amazon, image_bytes):
+# ==========================================
+# FONTE 2: PEPPER.IT (OFFERTE AMAZON ITALIA)
+# ==========================================
+def estrai_immagine_rss(item, desc_html):
+    for child in item:
+        tag = child.tag.lower()
+        if tag.endswith("content") or tag.endswith("enclosure") or tag.endswith("thumbnail"):
+            u = child.attrib.get("url")
+            if u and u.startswith("http"):
+                return u
+    m = re.search(r'<img[^>]+src=["\'](https?://[^"\']+)["\']', desc_html or "")
+    return m.group(1) if m else None
+
+
+def cerca_asin_su_pepper(link_pepper, desc_html):
+    asin = estrai_asin(desc_html)
+    if asin:
+        return asin
+    if not link_pepper:
+        return None
+    req = urllib.request.Request(link_pepper, headers=HEADERS_WEB)
+    try:
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            pagina = resp.read().decode("utf-8", errors="ignore")
+        if "amazon.it" not in pagina.lower():
+            return None
+        return estrai_asin(pagina)
+    except Exception:
+        return None
+
+
+def raccogli_da_pepper(asin_gia_postati, forza_test=False):
+    candidati = []
+    visti = set()
+    print("--- [2/3] Controllo Pepper.it (offerte Amazon) ---")
+
+    for idx, url in enumerate(PEPPER_FEED_URLS):
+        if idx > 0:
+            time.sleep(1.5)
+        req = urllib.request.Request(url, headers=HEADERS_WEB)
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                xml_data = resp.read()
+        except urllib.error.HTTPError as e:
+            print(f"  Pepper feed {idx + 1} bloccato (HTTP {e.code}) - salto Pepper.")
+            if e.code in (403, 429):
+                break
+            continue
+        except Exception as e:
+            print(f"  Pepper feed {idx + 1} errore: {e}")
+            continue
+
+        try:
+            root = ET.fromstring(xml_data)
+        except ET.ParseError:
+            continue
+
+        items = root.findall(".//item")[:10]
+        trovati = 0
+        for item in items:
+            titolo = (item.findtext("title") or "").strip()
+            link = (item.findtext("link") or "").strip()
+            desc = (item.findtext("description") or "").strip()
+
+            valido, _ = e_un_orologio_amazon(titolo)
+            if not valido:
+                continue
+
+            merchant_ok = "amazon" in f"{titolo} {desc}".lower()
+            for child in item:
+                if "merchant" in child.tag.lower() and "amazon" in (child.attrib.get("name", "") + (child.text or "")).lower():
+                    merchant_ok = True
+            if not merchant_ok:
+                continue
+
+            asin = cerca_asin_su_pepper(link, desc)
+            if not asin or asin in visti:
+                continue
+            if not forza_test and asin in asin_gia_postati:
+                continue
+
+            p_nuovo = None
+            for child in item:
+                if "merchant" in child.tag.lower() and child.attrib.get("price"):
+                    p_nuovo = parse_numero(child.attrib.get("price"))
+            if p_nuovo is None:
+                m_eur = re.search(r"(\d+(?:[.,]\d{1,2})?)\s*€", titolo)
+                if m_eur:
+                    p_nuovo = parse_numero(m_eur.group(1))
+
+            visti.add(asin)
+            trovati += 1
+            candidati.append({
+                "tipo": "AMAZON",
+                "priorita": 3,
+                "id_univoco": asin,
+                "titolo": titolo,
+                "marca": "Amazon",
+                "prezzo_nuovo": p_nuovo,
+                "prezzo_vecchio": None,
+                "sconto_pct": None,
+                "valuta": "€",
+                "desc_html": desc,
+                "img_url": estrai_immagine_rss(item, desc),
+                "negozio": "Amazon",
+            })
+
+        print(f"  Pepper feed {idx + 1}: {len(items)} letti | {trovati} orologi Amazon nuovi")
+
+    return candidati
+
+
+# ==========================================
+# FONTE 3: RADAR (D1 MILANO, BALTIC, HAMILTON, TISSOT, SEIKO, CITIZEN, CASIO)
+# ==========================================
+def raccogli_da_radar(stato, forza_test=False):
+    candidati = []
+    radar_stock = stato["radar_stock"]
+    radar_postati = set(stato["radar_postati"])
+    inizializzati = set(stato["radar_inizializzati"])
+    stato_modificato = False
+
+    print("--- [3/3] Controllo Radar (D1 Milano, Baltic, Hamilton, Tissot, Seiko, Citizen, Casio) ---")
+
+    for fonte in RADAR_FONTI:
+        nome_negozio = fonte["negozio"]
+        base_url = fonte["base_url"].rstrip("/")
+        valuta = fonte["valuta"]
+        filtra_marche = fonte["filtra_marche"]
+
+        prima_volta = nome_negozio not in inizializzati
+        limited_aggiunti = 0
+        trovati_negozio = 0
+        totale_prodotti_negozio = 0
+        visti_nel_negozio = set()
+        almeno_una_risposta = False
+
+        for col in fonte["collezioni"]:
+            if col:
+                url_json = f"{base_url}/collections/{col}/products.json?limit=60"
+            else:
+                url_json = f"{base_url}/products.json?limit=60"
+
+            time.sleep(0.4)
+            req = urllib.request.Request(url_json, headers=HEADERS_WEB)
+            try:
+                with urllib.request.urlopen(req, timeout=18) as resp:
+                    dati = json.loads(resp.read().decode("utf-8", errors="ignore"))
+                almeno_una_risposta = True
+            except Exception as e:
+                print(f"  Radar {nome_negozio} ({col or 'catalogo'}): errore ({e})")
+                continue
+
+            prodotti = dati.get("products", [])
+            totale_prodotti_negozio += len(prodotti)
+
+            for prod in prodotti:
+                prod_id = prod.get("id")
+                if not prod_id or prod_id in visti_nel_negozio:
+                    continue
+                visti_nel_negozio.add(prod_id)
+
+                titolo = (prod.get("title") or "").strip()
+                handle = (prod.get("handle") or "").strip()
+                vendor = (prod.get("vendor") or "").strip()
+                ptype = (prod.get("product_type") or "").strip()
+                tags_raw = prod.get("tags", [])
+                tags = " ".join(tags_raw) if isinstance(tags_raw, list) else str(tags_raw)
+
+                if not titolo or not handle:
+                    continue
+                if e_accessorio_o_gioiello(titolo, ptype):
+                    continue
+
+                if filtra_marche:
+                    marca = trova_marca_top(titolo, vendor)
+                    if not marca:
+                        continue
+                else:
+                    marca = nome_negozio
+
+                variants = prod.get("variants") or []
+                if not variants:
+                    continue
+
+                disponibili = [v for v in variants if v.get("available")]
+                disponibile = len(disponibili) > 0
+                v_ref = disponibili[0] if disponibili else variants[0]
+
+                p_nuovo = parse_numero(v_ref.get("price"))
+                p_vecchio = parse_numero(v_ref.get("compare_at_price"))
+                if p_nuovo is None or p_nuovo < PREZZO_MINIMO_RADAR:
+                    continue
+
+                sconto_pct = None
+                if p_vecchio and p_vecchio > p_nuovo:
+                    sconto_pct = round(((p_vecchio - p_nuovo) / p_vecchio) * 100.0, 1)
+
+                images = prod.get("images") or []
+                img_url = images[0].get("src") if images else None
+                if not img_url:
+                    continue
+
+                pid = f"{nome_negozio}:{prod_id}"
+                era_noto = pid in radar_stock
+                era_disponibile = radar_stock.get(pid, False)
+
+                if not era_noto or era_disponibile != disponibile:
+                    radar_stock[pid] = disponibile
+                    stato_modificato = True
+
+                if not disponibile:
+                    continue
+
+                url_prodotto = f"{base_url}/products/{handle}"
+                is_limited = e_edizione_limitata(titolo, tags)
+                is_sconto = sconto_pct is not None and sconto_pct >= SCONTO_MINIMO_RADAR_PCT
+
+                tipo_evento = None
+                priorita = 9
+
+                if not prima_volta and era_noto and not era_disponibile:
+                    tipo_evento = "RADAR_RESTOCK"
+                    priorita = 1
+                elif not prima_volta and not era_noto:
+                    tipo_evento = "RADAR_DROP"
+                    priorita = 2
+                elif is_sconto and (forza_test or pid not in radar_postati):
+                    tipo_evento = "RADAR_SCONTO"
+                    priorita = 4
+                elif is_limited and (forza_test or pid not in radar_postati):
+                    if limited_aggiunti < MAX_LIMITED_CATALOGO_PER_FONTE:
+                        tipo_evento = "RADAR_LIMITED"
+                        priorita = 5
+                        limited_aggiunti += 1
+
+                if tipo_evento:
+                    trovati_negozio += 1
+                    candidati.append({
+                        "tipo": tipo_evento,
+                        "priorita": priorita,
+                        "id_univoco": pid,
+                        "titolo": titolo,
+                        "marca": marca,
+                        "prezzo_nuovo": p_nuovo,
+                        "prezzo_vecchio": p_vecchio if is_sconto else None,
+                        "sconto_pct": sconto_pct if is_sconto else None,
+                        "valuta": valuta,
+                        "url": url_prodotto,
+                        "img_url": img_url,
+                        "negozio": nome_negozio,
+                    })
+
+        if prima_volta and almeno_una_risposta:
+            inizializzati.add(nome_negozio)
+            stato_modificato = True
+
+        print(f"  Radar {nome_negozio}: {totale_prodotti_negozio} letti | {trovati_negozio} segnalazioni")
+
+    stato["radar_inizializzati"] = sorted(list(inizializzati))
+    return candidati, stato_modificato
+
+
+# ==========================================
+# INVIO TELEGRAM
+# ==========================================
+def invia_foto_su_telegram(token, channel, caption_html, testo_bottone, url_bottone, image_bytes):
     boundary = f"----TelegramBotBoundary{uuid.uuid4().hex}"
     tastiera = json.dumps({
         "inline_keyboard": [[
-            {"text": "⌚ Apri su Amazon", "url": url_amazon}
+            {"text": testo_bottone, "url": url_bottone}
         ]]
     })
 
@@ -394,11 +796,60 @@ def invia_foto_su_telegram(token, channel, caption_html, url_amazon, image_bytes
         return False
 
 
+def formatta_messaggio(item, url_finale, titolo_finale):
+    titolo_esc = html.escape(titolo_finale)
+    url_esc = html.escape(url_finale, quote=True)
+    negozio_esc = html.escape(item["negozio"])
+    marca_esc = html.escape(item.get("marca") or item["negozio"])
+    canale_esc = html.escape(NOME_CANALE)
+    valuta = item["valuta"]
+
+    p_nuovo = item.get("prezzo_nuovo")
+    p_vecchio = item.get("prezzo_vecchio")
+    pct = item.get("sconto_pct")
+
+    if p_nuovo is not None and p_vecchio is not None and p_vecchio > p_nuovo:
+        extra = f" (-{pct:.0f}%)" if pct else ""
+        riga_prezzo = f"💰 <b>{formatta_prezzo(p_nuovo, valuta)} anziché {formatta_prezzo(p_vecchio, valuta)}!</b>{extra}"
+    elif p_nuovo is not None:
+        riga_prezzo = f"💰 <b>{formatta_prezzo(p_nuovo, valuta)}</b>"
+    elif pct is not None:
+        riga_prezzo = f"📉 <b>Calo di prezzo del -{pct:.0f}%!</b>"
+    else:
+        riga_prezzo = "📉 <b>Offerta attiva!</b>"
+
+    if item["tipo"] == "AMAZON":
+        caption = (
+            f"⌚ <i>{titolo_esc}</i>\n\n"
+            f"{riga_prezzo}\n"
+            f"👉 <a href=\"{url_esc}\">Apri su Amazon</a>\n\n"
+            f"⌚ Segnalata su {canale_esc} - #Ad"
+        )
+        return caption, "⌚ Apri su Amazon"
+
+    badge_map = {
+        "RADAR_RESTOCK": f"🔥 <b>RESTOCK DISPONIBILE — {marca_esc}</b>",
+        "RADAR_DROP": f"🚨 <b>NUOVO DROP — {marca_esc}</b>",
+        "RADAR_SCONTO": f"📉 <b>OFFERTA — {marca_esc}</b>",
+        "RADAR_LIMITED": f"✨ <b>EDIZIONE LIMITATA — {marca_esc}</b>",
+    }
+    badge = badge_map.get(item["tipo"], f"⌚ <b>{marca_esc}</b>")
+
+    caption = (
+        f"{badge}\n\n"
+        f"⌚ <i>{titolo_esc}</i>\n\n"
+        f"{riga_prezzo}\n"
+        f"👉 <a href=\"{url_esc}\">Vedi su {negozio_esc}</a>\n\n"
+        f"⌚ Segnalata su {canale_esc}"
+    )
+    return caption, f"⌚ Vedi su {item['negozio']}"
+
+
 def main():
     token = os.environ.get("TELEGRAM_TOKEN", "").strip()
     channel = os.environ.get("TELEGRAM_CHANNEL", "").strip()
     amazon_tag = os.environ.get("AMAZON_TAG", "").strip()
-    test_grafica = os.environ.get("TEST_GRAFICA", "false").lower() == "true"
+    forza_test = os.environ.get("TEST_GRAFICA", "false").lower() == "true"
 
     if not token or not channel:
         print("Mancano TELEGRAM_TOKEN o TELEGRAM_CHANNEL nei Secrets di GitHub.")
@@ -407,66 +858,69 @@ def main():
     if not channel.startswith("@") and not channel.lstrip("-").isdigit():
         channel = "@" + channel
 
-    pubblicati = carica_pubblicati()
-    offerte = scarica_offerte()
+    stato = carica_stato()
+    asin_set = set(stato["asin"])
 
-    if not offerte:
-        print(f"[{ora_italia()}] Nessun orologio valido trovato in questo giro.")
-        return
+    candidati = []
+    candidati.extend(raccogli_da_ccc(asin_set, forza_test))
+    candidati.extend(raccogli_da_pepper(asin_set, forza_test))
+    candidati_radar, stato_modificato = raccogli_da_radar(stato, forza_test)
+    candidati.extend(candidati_radar)
 
-    limite = 1 if test_grafica else MAX_POST_PER_GIRO
-    nuovi_post = 0
-    saltati_gia_postati = 0
+    # Priorità: Restock -> Nuovo Drop -> Offerte Amazon -> Sconti ufficiali -> Edizioni limitate
+    candidati.sort(key=lambda x: x["priorita"])
+    unici = []
+    visti_id = set()
+    for c in candidati:
+        if c["id_univoco"] in visti_id:
+            continue
+        visti_id.add(c["id_univoco"])
+        unici.append(c)
+
+    print(f"Candidati totali pronti: {len(unici)}")
+
+    limite = 1 if forza_test else MAX_POST_PER_GIRO
+    pubblicati_ora = 0
     saltati_senza_foto = 0
 
-    for off in offerte:
-        if nuovi_post >= limite:
+    for item in unici:
+        if pubblicati_ora >= limite:
             break
-        if not test_grafica and off["asin"] in pubblicati:
-            saltati_gia_postati += 1
-            continue
 
-        raw_img, titolo_pieno = recupera_foto_e_titolo_completo(off["asin"], off["desc"])
+        if item["tipo"] == "AMAZON":
+            raw_img, titolo_pieno = recupera_foto_amazon(item["id_univoco"], item["desc_html"], item["img_url"])
+            url_finale = costruisci_link_amazon(item["id_univoco"], amazon_tag)
+            titolo_finale = titolo_pieno or item["titolo"]
+        else:
+            raw_img = scarica_immagine_valida(item["img_url"])
+            url_finale = item["url"]
+            titolo_finale = item["titolo"]
+
         if not raw_img:
             saltati_senza_foto += 1
-            if SOLO_CON_FOTO:
-                continue
+            continue
 
         scheda_jpg = crea_scheda_grafica(raw_img)
-        url_amazon = costruisci_link_amazon(off["asin"], amazon_tag)
-        titolo_finale = html.escape(titolo_pieno or off["titolo"])
-        url_sicuro = html.escape(url_amazon, quote=True)
+        caption, testo_bottone = formatta_messaggio(item, url_finale, titolo_finale)
 
-        if off["prezzo_nuovo"] is not None and off["prezzo_vecchio"] is not None and off["prezzo_vecchio"] > off["prezzo_nuovo"]:
-            extra_pct = f" (-{off['sconto_pct']:.0f}%)" if off["sconto_pct"] else ""
-            riga_prezzo = f"💰 <b>{formatta_euro(off['prezzo_nuovo'])} anziché {formatta_euro(off['prezzo_vecchio'])}!</b>{extra_pct}"
-        elif off["prezzo_nuovo"] is not None:
-            riga_prezzo = f"💰 <b>In offerta a {formatta_euro(off['prezzo_nuovo'])}!</b>"
-        elif off["sconto_pct"] is not None:
-            riga_prezzo = f"📉 <b>Calo di prezzo del -{off['sconto_pct']:.0f}%!</b>"
-        else:
-            riga_prezzo = "📉 <b>Offerta attiva su Amazon!</b>"
-
-        messaggio = (
-            f"⌚ <i>{titolo_finale}</i>\n\n"
-            f"{riga_prezzo}\n"
-            f"👉 <a href=\"{url_sicuro}\">Apri su Amazon</a>\n\n"
-            f"⌚ Segnalata su {html.escape(NOME_CANALE)} - #Ad"
-        )
-
-        if invia_foto_su_telegram(token, channel, messaggio, url_amazon, scheda_jpg):
-            print(f"Pubblicato con foto: {off['asin']} | {titolo_finale[:60]}")
-            if off["asin"] not in pubblicati:
-                pubblicati.append(off["asin"])
-            nuovi_post += 1
+        if invia_foto_su_telegram(token, channel, caption, testo_bottone, url_finale, scheda_jpg):
+            print(f"Pubblicato [{item['tipo']}]: {titolo_finale[:65]}")
+            if item["tipo"] == "AMAZON":
+                if item["id_univoco"] not in stato["asin"]:
+                    stato["asin"].append(item["id_univoco"])
+            else:
+                if item["id_univoco"] not in stato["radar_postati"]:
+                    stato["radar_postati"].append(item["id_univoco"])
+            stato_modificato = True
+            pubblicati_ora += 1
 
     print(
-        f"[{ora_italia()}] Riepilogo -> Pubblicati: {nuovi_post} | "
-        f"Già postati: {saltati_gia_postati} | Senza foto: {saltati_senza_foto}"
+        f"[{ora_italia()}] Fine giro -> Pubblicati: {pubblicati_ora} | "
+        f"Senza foto: {saltati_senza_foto}"
     )
 
-    if nuovi_post > 0:
-        salva_pubblicati(pubblicati)
+    if stato_modificato:
+        salva_stato(stato)
 
 
 if __name__ == "__main__":
