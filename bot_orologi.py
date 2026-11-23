@@ -1,4 +1,5 @@
 import html
+import http.cookiejar
 import io
 import json
 import os
@@ -15,11 +16,11 @@ from zoneinfo import ZoneInfo
 from PIL import Image, ImageDraw
 
 # ==========================================
-# BOT OROLOGI 3-IN-1: AMAZON + PEPPER + RADAR
+# BOT OROLOGI: AMAZON + RADAR RIVENDITORI
 # ==========================================
 FILE_STATO = "pubblicati.json"
 NOME_CANALE = "Radar Orologi & Offerte"
-MAX_POST_PER_GIRO = 2             # Massimo 2 post ogni 30 min
+MAX_POST_PER_GIRO = 2             # Massimo 2 post per giro
 MAX_STORICO_ASIN = 500
 MAX_STORICO_RADAR = 500
 
@@ -32,35 +33,18 @@ SCONTO_MINIMO_RADAR_PCT = 10.0
 PREZZO_MINIMO_RADAR = 35.0
 MAX_LIMITED_CATALOGO_PER_FONTE = 2
 
-# 1) Feed CamelCamelCamel (solo 3 con pausa -> zero errori 429)
+# 1) Feed CamelCamelCamel (3 feed con pausa -> zero errori 429)
 CCC_FEED_URLS = [
     "https://it.camelcamelcamel.com/top_drops/feed?t=recent&s=relative&i=7&bn=orologi&d=1",
     "https://it.camelcamelcamel.com/top_drops/feed?t=recent&s=relative&i=1&bn=moda&d=1",
     "https://it.camelcamelcamel.com/top_drops/feed?t=recent&s=relative&i=1&bn=elettronica&d=1",
 ]
 
-# 2) Feed Pepper.it (offerte Amazon.it segnalate dagli utenti)
-PEPPER_FEED_URLS = [
-    "https://www.pepper.it/rss/search?q=seiko",
-    "https://www.pepper.it/rss/search?q=casio",
-    "https://www.pepper.it/rss/search?q=citizen",
-    "https://www.pepper.it/rss/search?q=tissot",
-    "https://www.pepper.it/rss/search?q=hamilton",
-    "https://www.pepper.it/rss/search?q=orologio",
-]
-
-# 3) Radar: D1 Milano + Baltic + Rivenditori autorizzati italiani (Hamilton, Tissot, Seiko, Citizen, Casio)
+# 2) Radar: D1 Milano + Rivenditori autorizzati italiani (Hamilton, Tissot, Seiko, Citizen, Casio)
 RADAR_FONTI = [
     {
         "negozio": "D1 Milano",
         "base_url": "https://d1milano.com",
-        "collezioni": [""],
-        "filtra_marche": False,
-        "valuta": "€",
-    },
-    {
-        "negozio": "Baltic",
-        "base_url": "https://baltic-watches.com",
         "collezioni": [""],
         "filtra_marche": False,
         "valuta": "€",
@@ -93,14 +77,14 @@ MARCHE_TOP_RADAR = [
     "hamilton", "tissot", "seiko", "casio", "g-shock", "gshock", "edifice",
     "citizen", "orient", "bulova", "longines", "mido", "certina", "oris",
     "frederique constant", "eberhard", "tag heuer", "tudor", "omega",
-    "d1 milano", "baltic", "swatch", "timex", "garmin", "suunto",
+    "d1 milano", "swatch", "timex", "garmin", "suunto",
 ]
 
-# Marchi/parole valide per Amazon e Pepper
+# Marchi/parole valide per Amazon
 PAROLE_OROLOGI_AMAZON = [
     "seiko", "casio", "g-shock", "gshock", "edifice", "citizen", "orient",
     "tissot", "hamilton", "timex", "bulova", "swatch", "longines", "mido",
-    "certina", "oris", "frederique constant", "d1 milano", "baltic",
+    "certina", "oris", "frederique constant", "d1 milano",
     "suunto", "garmin", "polar", "mondaine", "junghans", "glycine",
     "festina", "sector", "breil", "locman", "philip watch", "bering",
     "orologio", "orologi", "cronografo", "chronograph", "smartwatch",
@@ -151,7 +135,7 @@ HEADERS_WEB = {
         "Chrome/125.0.0.0 Safari/537.36"
     ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Language": "it-IT,it;q=0.9",
 }
 
 
@@ -281,7 +265,6 @@ def costruisci_link_amazon(asin, tag):
 
 
 def estrai_codice_modello(testo):
-    """Cerca la referenza dell'orologio (es. H64655941, T137.407.11.041.00, SRPD55K1, GA-2100-1A1ER)."""
     if not testo:
         return None
     tokens = re.findall(r"\b[A-Za-z0-9][A-Za-z0-9.\-]{4,22}\b", testo)
@@ -289,7 +272,6 @@ def estrai_codice_modello(testo):
         pulito = tok.strip(".-")
         if len(pulito) < 5:
             continue
-        # Scarta misure (42mm, 100m, 10atm, 20bar) e parole lunghe tipo "Edition-2026"
         if re.fullmatch(r"\d+(?:[.,]\d+)?(?:mm|cm|m|atm|bar|hz|g|gr|h|l|v)", pulito, flags=re.IGNORECASE):
             continue
         if re.search(r"[A-Za-z]{5,}", pulito):
@@ -302,7 +284,6 @@ def estrai_codice_modello(testo):
 
 
 def costruisci_link_ricerca_amazon(titolo, marca, sku, tag):
-    """Genera il link di ricerca su Amazon.it con codice modello (o nome pulito) + tag affiliato."""
     codice = estrai_codice_modello(titolo) or estrai_codice_modello(sku)
     if codice:
         if marca and marca.lower() not in codice.lower():
@@ -324,6 +305,172 @@ def costruisci_link_ricerca_amazon(titolo, marca, sku, tag):
     if tag:
         return f"{base}&tag={urllib.parse.quote(tag)}"
     return base
+
+
+# ==========================================
+# GESTIONE VALUTA EUR / MERCATO ITALIA (SHOPIFY)
+# ==========================================
+def estrai_valuta_shopify(html_text):
+    """Legge la valuta attiva e il tasso di cambio applicato da Shopify."""
+    if not html_text:
+        return None, 1.0
+    m = re.search(r"Shopify\.currency\s*=\s*(\{[^}]+\})", html_text)
+    if m:
+        try:
+            info = json.loads(m.group(1))
+            active = (info.get("active") or "").upper()
+            rate = parse_numero(info.get("rate"))
+            if active:
+                return active, (rate if rate and rate > 0 else 1.0)
+        except Exception:
+            pass
+    m_meta = re.search(
+        r'(?:og:price:currency|product:price:currency)["\'][^>]+content=["\']([A-Z]{3})["\']',
+        html_text,
+        flags=re.IGNORECASE,
+    )
+    if m_meta:
+        return m_meta.group(1).upper(), 1.0
+    m_ld = re.search(r'"priceCurrency"\s*:\s*"([A-Z]{3})"', html_text)
+    if m_ld:
+        return m_ld.group(1).upper(), 1.0
+    return None, 1.0
+
+
+def crea_sessione_italia(base_url):
+    """Crea una sessione HTTP forzata su Italia/EUR per evitare i prezzi in USD dai server GitHub."""
+    cj = http.cookiejar.CookieJar()
+    host = urllib.parse.urlparse(base_url).hostname or ""
+    dominio = host[4:] if host.startswith("www.") else host
+
+    for nome_cookie, valore in [("localization", "IT"), ("cart_currency", "EUR")]:
+        for dom in {host, f".{dominio}"}:
+            if not dom or dom == ".":
+                continue
+            cookie = http.cookiejar.Cookie(
+                version=0,
+                name=nome_cookie,
+                value=valore,
+                port=None,
+                port_specified=False,
+                domain=dom,
+                domain_specified=True,
+                domain_initial_dot=dom.startswith("."),
+                path="/",
+                path_specified=True,
+                secure=True,
+                expires=None,
+                discard=True,
+                comment=None,
+                comment_url=None,
+                rest={},
+                rfc2109=False,
+            )
+            cj.set_cookie(cookie)
+
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+    pagina_html = ""
+
+    # 1. Prova lo switch ufficiale Shopify Markets verso l'Italia
+    try:
+        dati_loc = urllib.parse.urlencode({
+            "form_type": "localization",
+            "utf8": "✓",
+            "_method": "put",
+            "return_to": "/",
+            "country_code": "IT",
+            "language_code": "it",
+        }).encode("utf-8")
+        req_loc = urllib.request.Request(
+            f"{base_url.rstrip('/')}/localization",
+            data=dati_loc,
+            headers={**HEADERS_WEB, "Content-Type": "application/x-www-form-urlencoded"},
+            method="POST",
+        )
+        with opener.open(req_loc, timeout=14) as resp:
+            pagina_html = resp.read().decode("utf-8", errors="ignore")
+    except Exception:
+        pass
+
+    # 2. Se il POST non ha restituito la home, legge la home con parametro country=IT
+    if not pagina_html:
+        try:
+            req_home = urllib.request.Request(f"{base_url.rstrip('/')}/?country=IT", headers=HEADERS_WEB)
+            with opener.open(req_home, timeout=14) as resp:
+                pagina_html = resp.read().decode("utf-8", errors="ignore")
+        except Exception:
+            pass
+
+    valuta_attiva, tasso = estrai_valuta_shopify(pagina_html)
+    return opener, (valuta_attiva or "EUR"), tasso
+
+
+def verifica_prezzo_reale_radar(item, opener, valuta_sessione, tasso_sessione):
+    """Controlla la scheda reale del prodotto prima del post per garantire prezzi esatti in EUR."""
+    url_prod = item.get("url")
+    if not url_prod or not opener:
+        return item
+
+    pagina_html = ""
+    try:
+        req = urllib.request.Request(url_prod, headers=HEADERS_WEB)
+        with opener.open(req, timeout=15) as resp:
+            pagina_html = resp.read().decode("utf-8", errors="ignore")
+    except Exception:
+        pass
+
+    valuta_pagina, tasso_pagina = estrai_valuta_shopify(pagina_html)
+    valuta_eff = valuta_pagina or valuta_sessione or "EUR"
+    tasso_eff = tasso_pagina if (valuta_pagina and tasso_pagina and tasso_pagina > 0) else tasso_sessione
+
+    # Prova anche /products/<handle>.js (restituisce i prezzi in centesimi nella valuta attiva)
+    js_nuovo = None
+    js_vecchio = None
+    try:
+        req_js = urllib.request.Request(f"{url_prod}.js", headers=HEADERS_WEB)
+        with opener.open(req_js, timeout=12) as resp:
+            dati_js = json.loads(resp.read().decode("utf-8", errors="ignore"))
+        varianti = dati_js.get("variants") or []
+        disponibili = [v for v in varianti if v.get("available")]
+        v_ref = disponibili[0] if disponibili else (varianti[0] if varianti else None)
+        if v_ref:
+            if v_ref.get("price"):
+                js_nuovo = round(float(v_ref["price"]) / 100.0, 2)
+            if v_ref.get("compare_at_price"):
+                js_vecchio = round(float(v_ref["compare_at_price"]) / 100.0, 2)
+    except Exception:
+        pass
+
+    # Usa i prezzi della pagina .js se disponibili
+    p_nuovo = js_nuovo if js_nuovo else item.get("prezzo_nuovo")
+    p_vecchio = js_vecchio if js_vecchio else item.get("prezzo_vecchio")
+
+    if valuta_eff == "EUR":
+        item["valuta"] = "€"
+    elif valuta_eff == "USD" and tasso_eff and tasso_eff > 1.01:
+        # Shopify ha ignorato i cookie IT e ha moltiplicato l'Euro per il tasso USD: riportiamo in EUR
+        if p_nuovo is not None:
+            p_nuovo = round(p_nuovo / tasso_eff, 2)
+        if p_vecchio is not None:
+            p_vecchio = round(p_vecchio / tasso_eff, 2)
+        item["valuta"] = "€"
+        print(f"  Valuta USD rilevata su {item['negozio']} (rate={tasso_eff}): convertito in EUR")
+    elif valuta_eff == "USD":
+        item["valuta"] = "$"
+
+    item["prezzo_nuovo"] = p_nuovo
+    if p_vecchio and p_nuovo and p_vecchio > p_nuovo:
+        item["prezzo_vecchio"] = p_vecchio
+        item["sconto_pct"] = round(((p_vecchio - p_nuovo) / p_vecchio) * 100.0, 1)
+    else:
+        item["prezzo_vecchio"] = None
+        item["sconto_pct"] = None
+
+    print(
+        f"  Prezzo verificato [{item['negozio']} | {valuta_eff}]: "
+        f"{p_nuovo}{item['valuta']}" + (f" (era {p_vecchio}{item['valuta']})" if item["prezzo_vecchio"] else "")
+    )
+    return item
 
 
 def versioni_hd_amazon(url):
@@ -464,7 +611,7 @@ def analizza_titolo_ccc(titolo_grezzo, desc_html=""):
 def raccogli_da_ccc(asin_gia_postati, forza_test=False):
     candidati = []
     visti = set()
-    print("--- [1/3] Controllo CamelCamelCamel Italia ---")
+    print("--- [1/2] Controllo CamelCamelCamel Italia ---")
 
     for idx, url in enumerate(CCC_FEED_URLS):
         if idx > 0:
@@ -531,135 +678,26 @@ def raccogli_da_ccc(asin_gia_postati, forza_test=False):
 
 
 # ==========================================
-# FONTE 2: PEPPER.IT (OFFERTE AMAZON ITALIA)
-# ==========================================
-def estrai_immagine_rss(item, desc_html):
-    for child in item:
-        tag = child.tag.lower()
-        if tag.endswith("content") or tag.endswith("enclosure") or tag.endswith("thumbnail"):
-            u = child.attrib.get("url")
-            if u and u.startswith("http"):
-                return u
-    m = re.search(r'<img[^>]+src=["\'](https?://[^"\']+)["\']', desc_html or "")
-    return m.group(1) if m else None
-
-
-def cerca_asin_su_pepper(link_pepper, desc_html):
-    asin = estrai_asin(desc_html)
-    if asin:
-        return asin
-    if not link_pepper:
-        return None
-    req = urllib.request.Request(link_pepper, headers=HEADERS_WEB)
-    try:
-        with urllib.request.urlopen(req, timeout=12) as resp:
-            pagina = resp.read().decode("utf-8", errors="ignore")
-        if "amazon.it" not in pagina.lower():
-            return None
-        return estrai_asin(pagina)
-    except Exception:
-        return None
-
-
-def raccogli_da_pepper(asin_gia_postati, forza_test=False):
-    candidati = []
-    visti = set()
-    print("--- [2/3] Controllo Pepper.it (offerte Amazon) ---")
-
-    for idx, url in enumerate(PEPPER_FEED_URLS):
-        if idx > 0:
-            time.sleep(1.5)
-        req = urllib.request.Request(url, headers=HEADERS_WEB)
-        try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                xml_data = resp.read()
-        except urllib.error.HTTPError as e:
-            print(f"  Pepper feed {idx + 1} bloccato (HTTP {e.code}) - salto Pepper.")
-            if e.code in (403, 429):
-                break
-            continue
-        except Exception as e:
-            print(f"  Pepper feed {idx + 1} errore: {e}")
-            continue
-
-        try:
-            root = ET.fromstring(xml_data)
-        except ET.ParseError:
-            continue
-
-        items = root.findall(".//item")[:10]
-        trovati = 0
-        for item in items:
-            titolo = (item.findtext("title") or "").strip()
-            link = (item.findtext("link") or "").strip()
-            desc = (item.findtext("description") or "").strip()
-
-            valido, _ = e_un_orologio_amazon(titolo)
-            if not valido:
-                continue
-
-            merchant_ok = "amazon" in f"{titolo} {desc}".lower()
-            for child in item:
-                if "merchant" in child.tag.lower() and "amazon" in (child.attrib.get("name", "") + (child.text or "")).lower():
-                    merchant_ok = True
-            if not merchant_ok:
-                continue
-
-            asin = cerca_asin_su_pepper(link, desc)
-            if not asin or asin in visti:
-                continue
-            if not forza_test and asin in asin_gia_postati:
-                continue
-
-            p_nuovo = None
-            for child in item:
-                if "merchant" in child.tag.lower() and child.attrib.get("price"):
-                    p_nuovo = parse_numero(child.attrib.get("price"))
-            if p_nuovo is None:
-                m_eur = re.search(r"(\d+(?:[.,]\d{1,2})?)\s*€", titolo)
-                if m_eur:
-                    p_nuovo = parse_numero(m_eur.group(1))
-
-            visti.add(asin)
-            trovati += 1
-            candidati.append({
-                "tipo": "AMAZON",
-                "priorita": 1,
-                "id_univoco": asin,
-                "titolo": titolo,
-                "marca": "Amazon",
-                "sku": "",
-                "prezzo_nuovo": p_nuovo,
-                "prezzo_vecchio": None,
-                "sconto_pct": None,
-                "valuta": "€",
-                "desc_html": desc,
-                "img_url": estrai_immagine_rss(item, desc),
-                "negozio": "Amazon",
-            })
-
-        print(f"  Pepper feed {idx + 1}: {len(items)} letti | {trovati} orologi Amazon nuovi")
-
-    return candidati
-
-
-# ==========================================
-# FONTE 3: RADAR (D1 MILANO, BALTIC, HAMILTON, TISSOT, SEIKO, CITIZEN, CASIO)
+# FONTE 2: RADAR RIVENDITORI & BRAND (FORZATO EUR)
 # ==========================================
 def raccogli_da_radar(stato, forza_test=False):
     candidati = []
+    sessioni = {}
     radar_stock = stato["radar_stock"]
     radar_postati = set(stato["radar_postati"])
     inizializzati = set(stato["radar_inizializzati"])
     stato_modificato = False
 
-    print("--- [3/3] Controllo Radar (D1 Milano, Baltic, Hamilton, Tissot, Seiko, Citizen, Casio) ---")
+    print("--- [2/2] Controllo Radar (D1 Milano, Hamilton, Tissot, Seiko, Citizen, Casio) ---")
 
     for fonte in RADAR_FONTI:
         nome_negozio = fonte["negozio"]
         base_url = fonte["base_url"].rstrip("/")
         valuta = fonte["valuta"]
         filtra_marche = fonte["filtra_marche"]
+
+        opener, valuta_sessione, tasso_sessione = crea_sessione_italia(base_url)
+        sessioni[nome_negozio] = (opener, valuta_sessione, tasso_sessione)
 
         prima_volta = nome_negozio not in inizializzati
         limited_aggiunti = 0
@@ -677,7 +715,7 @@ def raccogli_da_radar(stato, forza_test=False):
             time.sleep(0.4)
             req = urllib.request.Request(url_json, headers=HEADERS_WEB)
             try:
-                with urllib.request.urlopen(req, timeout=18) as resp:
+                with opener.open(req, timeout=18) as resp:
                     dati = json.loads(resp.read().decode("utf-8", errors="ignore"))
                 almeno_una_risposta = True
             except Exception as e:
@@ -764,7 +802,7 @@ def raccogli_da_radar(stato, forza_test=False):
                 elif is_limited and (forza_test or pid not in radar_postati):
                     if limited_aggiunti < MAX_LIMITED_CATALOGO_PER_FONTE:
                         tipo_evento = "RADAR_LIMITED"
-                        priorita = 5
+                        priorita = 4
                         limited_aggiunti += 1
 
                 if tipo_evento:
@@ -789,17 +827,20 @@ def raccogli_da_radar(stato, forza_test=False):
             inizializzati.add(nome_negozio)
             stato_modificato = True
 
-        print(f"  Radar {nome_negozio}: {totale_prodotti_negozio} letti | {trovati_negozio} segnalazioni")
+        print(
+            f"  Radar {nome_negozio} [valuta: {valuta_sessione}, rate: {tasso_sessione}]: "
+            f"{totale_prodotti_negozio} letti | {trovati_negozio} segnalazioni"
+        )
 
     stato["radar_inizializzati"] = sorted(list(inizializzati))
-    return candidati, stato_modificato
+    return candidati, stato_modificato, sessioni
 
 
 # ==========================================
-# ORDINAMENTO + MESCOLAMENTO PER MARCHIO
+# ORDINAMENTO + ALTERNANZA NEGOZIO E MARCHIO
 # ==========================================
 def ordina_e_mescola_candidati(candidati):
-    """Priorità: Amazon -> Restock -> Drop -> Sconti -> Limited, alternando marchi diversi."""
+    """Priorità: Amazon -> Restock -> Drop -> Sconti/Limited, alternando negozi e marchi diversi."""
     candidati.sort(key=lambda x: x["priorita"])
     unici = []
     visti_id = set()
@@ -812,21 +853,32 @@ def ordina_e_mescola_candidati(candidati):
     per_priorita = {}
     for c in unici:
         p = c["priorita"]
-        marca = (c.get("marca") or c.get("negozio") or "Altro").lower()
-        per_priorita.setdefault(p, {}).setdefault(marca, []).append(c)
+        negozio = c.get("negozio") or "Altro"
+        per_priorita.setdefault(p, {}).setdefault(negozio, []).append(c)
 
     risultato = []
     for p in sorted(per_priorita.keys()):
-        gruppi_marca = per_priorita[p]
-        marche = list(gruppi_marca.keys())
-        random.shuffle(marche)
-        for m in marche:
-            random.shuffle(gruppi_marca[m])
+        gruppi_negozio = per_priorita[p]
+        negozi = list(gruppi_negozio.keys())
+        random.shuffle(negozi)
+        for n in negozi:
+            random.shuffle(gruppi_negozio[n])
 
-        while any(gruppi_marca[m] for m in marche):
-            for m in marche:
-                if gruppi_marca[m]:
-                    risultato.append(gruppi_marca[m].pop(0))
+        ultima_marca = None
+        while any(gruppi_negozio[n] for n in negozi):
+            for n in negozi:
+                lista = gruppi_negozio[n]
+                if not lista:
+                    continue
+                scelto_idx = 0
+                if ultima_marca:
+                    for i, item in enumerate(lista):
+                        if (item.get("marca") or "").lower() != ultima_marca:
+                            scelto_idx = i
+                            break
+                scelto = lista.pop(scelto_idx)
+                ultima_marca = (scelto.get("marca") or "").lower()
+                risultato.append(scelto)
 
     return risultato
 
@@ -958,12 +1010,11 @@ def main():
 
     candidati = []
     candidati.extend(raccogli_da_ccc(asin_set, forza_test))
-    candidati.extend(raccogli_da_pepper(asin_set, forza_test))
-    candidati_radar, stato_modificato = raccogli_da_radar(stato, forza_test)
+    candidati_radar, stato_modificato, sessioni = raccogli_da_radar(stato, forza_test)
     candidati.extend(candidati_radar)
 
     unici = ordina_e_mescola_candidati(candidati)
-    print(f"Candidati totali pronti (priorità Amazon + mescolati): {len(unici)}")
+    print(f"Candidati totali pronti (alternati per negozio e marca): {len(unici)}")
 
     limite = 1 if forza_test else MAX_POST_PER_GIRO
     pubblicati_ora = 0
@@ -978,6 +1029,8 @@ def main():
             url_finale = costruisci_link_amazon(item["id_univoco"], amazon_tag)
             titolo_finale = titolo_pieno or item["titolo"]
         else:
+            opener, val_sess, tasso_sess = sessioni.get(item["negozio"], (None, "EUR", 1.0))
+            item = verifica_prezzo_reale_radar(item, opener, val_sess, tasso_sess)
             raw_img = scarica_immagine_valida(item["img_url"])
             url_finale = item["url"]
             titolo_finale = item["titolo"]
@@ -990,7 +1043,7 @@ def main():
         caption, bottoni = formatta_messaggio(item, url_finale, titolo_finale, amazon_tag)
 
         if invia_foto_su_telegram(token, channel, caption, bottoni, scheda_jpg):
-            print(f"Pubblicato [{item['tipo']} - {item.get('marca')}]: {titolo_finale[:60]}")
+            print(f"Pubblicato [{item['tipo']} - {item.get('negozio')} - {item.get('marca')}]: {titolo_finale[:55]}")
             if item["tipo"] == "AMAZON":
                 if item["id_univoco"] not in stato["asin"]:
                     stato["asin"].append(item["id_univoco"])
