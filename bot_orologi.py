@@ -30,7 +30,9 @@ RISPARMIO_MINIMO_AMAZON_EUR = 10.0
 
 # Soglie Radar rivenditori ufficiali / brand
 SCONTO_MINIMO_RADAR_PCT = 10.0
-PREZZO_MINIMO_RADAR = 35.0
+PREZZO_MINIMO_RADAR = 60.0        # Taglia i modelli ultra-economici
+SOGLIA_LISTINO_TOP = 180.0        # Fascia Top: listino >= 180€ ...
+SOGLIA_RISPARMIO_TOP = 40.0       # ... oppure almeno 40€ di sconto reale
 MAX_LIMITED_CATALOGO_PER_FONTE = 2
 
 # 1) Feed CamelCamelCamel (3 feed con pausa -> zero errori 429)
@@ -40,8 +42,46 @@ CCC_FEED_URLS = [
     "https://it.camelcamelcamel.com/top_drops/feed?t=recent&s=relative&i=1&bn=elettronica&d=1",
 ]
 
-# 2) Radar: D1 Milano + Rivenditori autorizzati italiani (Hamilton, Tissot, Seiko, Citizen, Casio)
+# 2) Radar: Rivenditori autorizzati italiani + D1 Milano
 RADAR_FONTI = [
+    {
+        "negozio": "Orafo La Morgia",
+        "base_url": "https://www.orafolamorgia.it",
+        "collezioni": ["hamilton", "tissot", "seiko", "outlet"],
+        "filtra_marche": True,
+        "valuta": "€",
+    },
+    {
+        "negozio": "Ferrari Luca Gioielli",
+        "base_url": "https://ferrarilucagioielli.it",
+        "collezioni": [
+            "hamilton", "tissot", "seiko", "citizen", "orologi-casio",
+            "orologi-longines", "bulova", "festina",
+        ],
+        "filtra_marche": True,
+        "valuta": "€",
+    },
+    {
+        "negozio": "2B Gioielli",
+        "base_url": "https://2bgioielli.it",
+        "collezioni": ["orologi-eleganti", "citizen", "festina", "orologi"],
+        "filtra_marche": True,
+        "valuta": "€",
+    },
+    {
+        "negozio": "Gioielleria Petrillo",
+        "base_url": "https://gioielleriapetrillo.it",
+        "collezioni": ["bulova-orologi"],
+        "filtra_marche": True,
+        "valuta": "€",
+    },
+    {
+        "negozio": "Iannicelli 1872",
+        "base_url": "https://iannicelli.com",
+        "collezioni": ["tudor", "longines"],
+        "filtra_marche": True,
+        "valuta": "€",
+    },
     {
         "negozio": "D1 Milano",
         "base_url": "https://d1milano.com",
@@ -49,44 +89,23 @@ RADAR_FONTI = [
         "filtra_marche": False,
         "valuta": "€",
     },
-    {
-        "negozio": "Orafo La Morgia",
-        "base_url": "https://www.orafolamorgia.it",
-        "collezioni": ["hamilton", "tissot", "seiko"],
-        "filtra_marche": True,
-        "valuta": "€",
-    },
-    {
-        "negozio": "Ferrari Luca Gioielli",
-        "base_url": "https://ferrarilucagioielli.it",
-        "collezioni": ["hamilton", "tissot", "seiko", "citizen", "orologi-casio"],
-        "filtra_marche": True,
-        "valuta": "€",
-    },
-    {
-        "negozio": "2B Gioielli",
-        "base_url": "https://2bgioielli.it",
-        "collezioni": ["orologi-eleganti", "citizen", "orologi"],
-        "filtra_marche": True,
-        "valuta": "€",
-    },
 ]
 
 # Marchi ammessi dal Radar sui rivenditori multimarca
 MARCHE_TOP_RADAR = [
     "hamilton", "tissot", "seiko", "casio", "g-shock", "gshock", "edifice",
-    "citizen", "orient", "bulova", "longines", "mido", "certina", "oris",
-    "frederique constant", "eberhard", "tag heuer", "tudor", "omega",
-    "d1 milano", "swatch", "timex", "garmin", "suunto",
+    "citizen", "orient", "bulova", "longines", "tudor", "festina", "mido",
+    "certina", "oris", "frederique constant", "eberhard", "tag heuer",
+    "omega", "d1 milano", "swatch", "timex", "garmin", "suunto",
 ]
 
 # Marchi/parole valide per Amazon
 PAROLE_OROLOGI_AMAZON = [
     "seiko", "casio", "g-shock", "gshock", "edifice", "citizen", "orient",
-    "tissot", "hamilton", "timex", "bulova", "swatch", "longines", "mido",
-    "certina", "oris", "frederique constant", "d1 milano",
+    "tissot", "hamilton", "timex", "bulova", "swatch", "longines", "tudor",
+    "festina", "mido", "certina", "oris", "frederique constant", "d1 milano",
     "suunto", "garmin", "polar", "mondaine", "junghans", "glycine",
-    "festina", "sector", "breil", "locman", "philip watch", "bering",
+    "sector", "breil", "locman", "philip watch", "bering",
     "orologio", "orologi", "cronografo", "chronograph", "smartwatch",
 ]
 
@@ -119,7 +138,7 @@ PAROLE_VIETATE_RADAR = [
     "voucher", "buono regalo", "book", "magazine", "poster", "print",
     "accessory", "accessories", "accessori", "servicing", "warranty",
     "polishing", "cloth", "wallet", "portafoglio", "keyring", "portachiavi",
-    "stand", "sveglia", "parete", "muro",
+    "stand", "sveglia", "parete", "muro", "penna", "pennino",
 ]
 
 PAROLE_LIMITED = [
@@ -221,6 +240,12 @@ def e_edizione_limitata(titolo, tags=""):
     return False
 
 
+def pulisci_titolo_radar(titolo):
+    """Rimuove trattini bassi sporchi davanti ai codici modello (es. '_97B223' -> '97B223')."""
+    t = re.sub(r"\s+_([A-Za-z0-9])", r" \1", titolo or "")
+    return re.sub(r"\s+", " ", t).strip()
+
+
 def parse_numero(testo):
     if testo is None:
         return None
@@ -267,7 +292,8 @@ def costruisci_link_amazon(asin, tag):
 def estrai_codice_modello(testo):
     if not testo:
         return None
-    tokens = re.findall(r"\b[A-Za-z0-9][A-Za-z0-9.\-]{4,22}\b", testo)
+    testo_pulito = testo.replace("_", " ")
+    tokens = re.findall(r"\b[A-Za-z0-9][A-Za-z0-9.\-]{4,22}\b", testo_pulito)
     for tok in reversed(tokens):
         pulito = tok.strip(".-")
         if len(pulito) < 5:
@@ -311,7 +337,6 @@ def costruisci_link_ricerca_amazon(titolo, marca, sku, tag):
 # GESTIONE VALUTA EUR / MERCATO ITALIA (SHOPIFY)
 # ==========================================
 def estrai_valuta_shopify(html_text):
-    """Legge la valuta attiva e il tasso di cambio applicato da Shopify."""
     if not html_text:
         return None, 1.0
     m = re.search(r"Shopify\.currency\s*=\s*(\{[^}]+\})", html_text)
@@ -338,7 +363,6 @@ def estrai_valuta_shopify(html_text):
 
 
 def crea_sessione_italia(base_url):
-    """Crea una sessione HTTP forzata su Italia/EUR per evitare i prezzi in USD dai server GitHub."""
     cj = http.cookiejar.CookieJar()
     host = urllib.parse.urlparse(base_url).hostname or ""
     dominio = host[4:] if host.startswith("www.") else host
@@ -371,7 +395,6 @@ def crea_sessione_italia(base_url):
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
     pagina_html = ""
 
-    # 1. Prova lo switch ufficiale Shopify Markets verso l'Italia
     try:
         dati_loc = urllib.parse.urlencode({
             "form_type": "localization",
@@ -392,7 +415,6 @@ def crea_sessione_italia(base_url):
     except Exception:
         pass
 
-    # 2. Se il POST non ha restituito la home, legge la home con parametro country=IT
     if not pagina_html:
         try:
             req_home = urllib.request.Request(f"{base_url.rstrip('/')}/?country=IT", headers=HEADERS_WEB)
@@ -406,7 +428,6 @@ def crea_sessione_italia(base_url):
 
 
 def verifica_prezzo_reale_radar(item, opener, valuta_sessione, tasso_sessione):
-    """Controlla la scheda reale del prodotto prima del post per garantire prezzi esatti in EUR."""
     url_prod = item.get("url")
     if not url_prod or not opener:
         return item
@@ -423,7 +444,6 @@ def verifica_prezzo_reale_radar(item, opener, valuta_sessione, tasso_sessione):
     valuta_eff = valuta_pagina or valuta_sessione or "EUR"
     tasso_eff = tasso_pagina if (valuta_pagina and tasso_pagina and tasso_pagina > 0) else tasso_sessione
 
-    # Prova anche /products/<handle>.js (restituisce i prezzi in centesimi nella valuta attiva)
     js_nuovo = None
     js_vecchio = None
     try:
@@ -441,20 +461,17 @@ def verifica_prezzo_reale_radar(item, opener, valuta_sessione, tasso_sessione):
     except Exception:
         pass
 
-    # Usa i prezzi della pagina .js se disponibili
     p_nuovo = js_nuovo if js_nuovo else item.get("prezzo_nuovo")
     p_vecchio = js_vecchio if js_vecchio else item.get("prezzo_vecchio")
 
     if valuta_eff == "EUR":
         item["valuta"] = "€"
     elif valuta_eff == "USD" and tasso_eff and tasso_eff > 1.01:
-        # Shopify ha ignorato i cookie IT e ha moltiplicato l'Euro per il tasso USD: riportiamo in EUR
         if p_nuovo is not None:
             p_nuovo = round(p_nuovo / tasso_eff, 2)
         if p_vecchio is not None:
             p_vecchio = round(p_vecchio / tasso_eff, 2)
         item["valuta"] = "€"
-        print(f"  Valuta USD rilevata su {item['negozio']} (rate={tasso_eff}): convertito in EUR")
     elif valuta_eff == "USD":
         item["valuta"] = "$"
 
@@ -552,7 +569,6 @@ def recupera_foto_amazon(asin, desc_html="", extra_img=None):
 
 
 def crea_scheda_grafica(raw_bytes):
-    """Monta la foto prodotto pulita su una scheda bianca 16:9 senza logo."""
     canvas_w, canvas_h = 1200, 675
     sfondo = Image.new("RGBA", (canvas_w, canvas_h), (255, 255, 255, 255))
 
@@ -659,6 +675,7 @@ def raccogli_da_ccc(asin_gia_postati, forza_test=False):
             candidati.append({
                 "tipo": "AMAZON",
                 "priorita": 1,
+                "punteggio": (sconto_pct or 10.0) * 2.0 + (risparmio or 0.0),
                 "id_univoco": asin,
                 "titolo": titolo_pulito,
                 "marca": "Amazon",
@@ -678,7 +695,7 @@ def raccogli_da_ccc(asin_gia_postati, forza_test=False):
 
 
 # ==========================================
-# FONTE 2: RADAR RIVENDITORI & BRAND (FORZATO EUR)
+# FONTE 2: RADAR RIVENDITORI & BRAND
 # ==========================================
 def raccogli_da_radar(stato, forza_test=False):
     candidati = []
@@ -688,16 +705,18 @@ def raccogli_da_radar(stato, forza_test=False):
     inizializzati = set(stato["radar_inizializzati"])
     stato_modificato = False
 
-    print("--- [2/2] Controllo Radar (D1 Milano, Hamilton, Tissot, Seiko, Citizen, Casio) ---")
+    print("--- [2/2] Controllo Radar (Hamilton, Tissot, Seiko, Citizen, Casio, Longines, Bulova, Tudor, Festina, D1 Milano) ---")
 
     for fonte in RADAR_FONTI:
         nome_negozio = fonte["negozio"]
         base_url = fonte["base_url"].rstrip("/")
-        valuta = fonte["valuta"]
         filtra_marche = fonte["filtra_marche"]
 
         opener, valuta_sessione, tasso_sessione = crea_sessione_italia(base_url)
         sessioni[nome_negozio] = (opener, valuta_sessione, tasso_sessione)
+
+        solo_dollari = (valuta_sessione == "USD" and not (tasso_sessione and tasso_sessione > 1.01))
+        valuta_negozio = "$" if solo_dollari else "€"
 
         prima_volta = nome_negozio not in inizializzati
         limited_aggiunti = 0
@@ -731,7 +750,7 @@ def raccogli_da_radar(stato, forza_test=False):
                     continue
                 visti_nel_negozio.add(prod_id)
 
-                titolo = (prod.get("title") or "").strip()
+                titolo = pulisci_titolo_radar(prod.get("title") or "")
                 handle = (prod.get("handle") or "").strip()
                 vendor = (prod.get("vendor") or "").strip()
                 ptype = (prod.get("product_type") or "").strip()
@@ -764,8 +783,10 @@ def raccogli_da_radar(stato, forza_test=False):
                     continue
 
                 sconto_pct = None
+                risparmio = 0.0
                 if p_vecchio and p_vecchio > p_nuovo:
-                    sconto_pct = round(((p_vecchio - p_nuovo) / p_vecchio) * 100.0, 1)
+                    risparmio = p_vecchio - p_nuovo
+                    sconto_pct = round((risparmio / p_vecchio) * 100.0, 1)
 
                 images = prod.get("images") or []
                 img_url = images[0].get("src") if images else None
@@ -788,7 +809,7 @@ def raccogli_da_radar(stato, forza_test=False):
                 is_sconto = sconto_pct is not None and sconto_pct >= SCONTO_MINIMO_RADAR_PCT
 
                 tipo_evento = None
-                priorita = 9
+                priorita = 99
 
                 if not prima_volta and era_noto and not era_disponibile:
                     tipo_evento = "RADAR_RESTOCK"
@@ -798,18 +819,28 @@ def raccogli_da_radar(stato, forza_test=False):
                     priorita = 3
                 elif is_sconto and (forza_test or pid not in radar_postati):
                     tipo_evento = "RADAR_SCONTO"
-                    priorita = 4
+                    listino_ref = p_vecchio or p_nuovo
+                    if listino_ref >= SOGLIA_LISTINO_TOP or risparmio >= SOGLIA_RISPARMIO_TOP:
+                        priorita = 4
+                    else:
+                        priorita = 5
                 elif is_limited and (forza_test or pid not in radar_postati):
                     if limited_aggiunti < MAX_LIMITED_CATALOGO_PER_FONTE:
                         tipo_evento = "RADAR_LIMITED"
-                        priorita = 4
+                        priorita = 6
                         limited_aggiunti += 1
 
                 if tipo_evento:
+                    if solo_dollari:
+                        priorita = 99
+
+                    punteggio = (sconto_pct or 0.0) * 2.5 + min(risparmio, 350.0) * 0.35 + min(p_nuovo, 1200.0) * 0.03
+
                     trovati_negozio += 1
                     candidati.append({
                         "tipo": tipo_evento,
                         "priorita": priorita,
+                        "punteggio": punteggio,
                         "id_univoco": pid,
                         "titolo": titolo,
                         "marca": marca,
@@ -817,7 +848,7 @@ def raccogli_da_radar(stato, forza_test=False):
                         "prezzo_nuovo": p_nuovo,
                         "prezzo_vecchio": p_vecchio if is_sconto else None,
                         "sconto_pct": sconto_pct if is_sconto else None,
-                        "valuta": valuta,
+                        "valuta": valuta_negozio,
                         "url": url_prodotto,
                         "img_url": img_url,
                         "negozio": nome_negozio,
@@ -837,11 +868,19 @@ def raccogli_da_radar(stato, forza_test=False):
 
 
 # ==========================================
-# ORDINAMENTO + ALTERNANZA NEGOZIO E MARCHIO
+# ORDINAMENTO QUALITATIVO + ALTERNANZA
 # ==========================================
 def ordina_e_mescola_candidati(candidati):
-    """Priorità: Amazon -> Restock -> Drop -> Sconti/Limited, alternando negozi e marchi diversi."""
-    candidati.sort(key=lambda x: x["priorita"])
+    """
+    Ordine:
+      1: Amazon | 2: Restock EUR | 3: Drop EUR
+      4: Sconti Fascia Top EUR (>=180€ o >=40€ risparmio)
+      5: Sconti Fascia Entry EUR (60€-180€)
+      6: Limited non scontate EUR
+      99: Prodotti in USD (ultima spiaggia)
+    Alterna negozi e marchi diversi premiando le offerte migliori.
+    """
+    candidati.sort(key=lambda x: (x["priorita"], -x.get("punteggio", 0.0)))
     unici = []
     visti_id = set()
     for c in candidati:
@@ -861,8 +900,12 @@ def ordina_e_mescola_candidati(candidati):
         gruppi_negozio = per_priorita[p]
         negozi = list(gruppi_negozio.keys())
         random.shuffle(negozi)
+
         for n in negozi:
-            random.shuffle(gruppi_negozio[n])
+            gruppi_negozio[n].sort(
+                key=lambda x: x.get("punteggio", 0.0) + random.uniform(0.0, 22.0),
+                reverse=True,
+            )
 
         ultima_marca = None
         while any(gruppi_negozio[n] for n in negozi):
@@ -992,6 +1035,24 @@ def formatta_messaggio(item, url_finale, titolo_finale, amazon_tag=""):
     return caption, bottoni
 
 
+def pubblica_item(item, token, channel, amazon_tag, stato, raw_img, url_finale, titolo_finale):
+    scheda_jpg = crea_scheda_grafica(raw_img)
+    caption, bottoni = formatta_messaggio(item, url_finale, titolo_finale, amazon_tag)
+    if invia_foto_su_telegram(token, channel, caption, bottoni, scheda_jpg):
+        print(
+            f"Pubblicato [P{item['priorita']} | {item['tipo']} | "
+            f"{item.get('negozio')} | {item.get('marca')}]: {titolo_finale[:55]}"
+        )
+        if item["tipo"] == "AMAZON":
+            if item["id_univoco"] not in stato["asin"]:
+                stato["asin"].append(item["id_univoco"])
+        else:
+            if item["id_univoco"] not in stato["radar_postati"]:
+                stato["radar_postati"].append(item["id_univoco"])
+        return True
+    return False
+
+
 def main():
     token = os.environ.get("TELEGRAM_TOKEN", "").strip()
     channel = os.environ.get("TELEGRAM_CHANNEL", "").strip()
@@ -1014,11 +1075,12 @@ def main():
     candidati.extend(candidati_radar)
 
     unici = ordina_e_mescola_candidati(candidati)
-    print(f"Candidati totali pronti (alternati per negozio e marca): {len(unici)}")
+    print(f"Candidati totali pronti (EUR fascia top -> entry -> limited -> USD): {len(unici)}")
 
     limite = 1 if forza_test else MAX_POST_PER_GIRO
     pubblicati_ora = 0
     saltati_senza_foto = 0
+    riserva_usd = []
 
     for item in unici:
         if pubblicati_ora >= limite:
@@ -1029,8 +1091,14 @@ def main():
             url_finale = costruisci_link_amazon(item["id_univoco"], amazon_tag)
             titolo_finale = titolo_pieno or item["titolo"]
         else:
+            if item["valuta"] == "$":
+                riserva_usd.append(item)
+                continue
             opener, val_sess, tasso_sess = sessioni.get(item["negozio"], (None, "EUR", 1.0))
             item = verifica_prezzo_reale_radar(item, opener, val_sess, tasso_sess)
+            if item["valuta"] == "$":
+                riserva_usd.append(item)
+                continue
             raw_img = scarica_immagine_valida(item["img_url"])
             url_finale = item["url"]
             titolo_finale = item["titolo"]
@@ -1039,17 +1107,21 @@ def main():
             saltati_senza_foto += 1
             continue
 
-        scheda_jpg = crea_scheda_grafica(raw_img)
-        caption, bottoni = formatta_messaggio(item, url_finale, titolo_finale, amazon_tag)
+        if pubblica_item(item, token, channel, amazon_tag, stato, raw_img, url_finale, titolo_finale):
+            stato_modificato = True
+            pubblicati_ora += 1
 
-        if invia_foto_su_telegram(token, channel, caption, bottoni, scheda_jpg):
-            print(f"Pubblicato [{item['tipo']} - {item.get('negozio')} - {item.get('marca')}]: {titolo_finale[:55]}")
-            if item["tipo"] == "AMAZON":
-                if item["id_univoco"] not in stato["asin"]:
-                    stato["asin"].append(item["id_univoco"])
-            else:
-                if item["id_univoco"] not in stato["radar_postati"]:
-                    stato["radar_postati"].append(item["id_univoco"])
+    # Solo se non c'era letteralmente nessun prodotto valido in EUR, usa la riserva USD
+    for item in riserva_usd:
+        if pubblicati_ora >= limite:
+            break
+        opener, val_sess, tasso_sess = sessioni.get(item["negozio"], (None, "USD", 1.0))
+        item = verifica_prezzo_reale_radar(item, opener, val_sess, tasso_sess)
+        raw_img = scarica_immagine_valida(item["img_url"])
+        if not raw_img:
+            saltati_senza_foto += 1
+            continue
+        if pubblica_item(item, token, channel, amazon_tag, stato, raw_img, item["url"], item["titolo"]):
             stato_modificato = True
             pubblicati_ora += 1
 
