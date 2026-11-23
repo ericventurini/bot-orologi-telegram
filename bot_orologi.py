@@ -23,6 +23,7 @@ NOME_CANALE = "Radar Orologi & Offerte"
 MAX_POST_PER_GIRO = 2             # Massimo 2 post per giro
 MAX_STORICO_ASIN = 500
 MAX_STORICO_RADAR = 500
+MEMORIA_ULTIME_MARCHE = 4         # Evita di ripetere gli ultimi 4 marchi usciti
 
 # Soglie offerte Amazon
 SCONTO_MINIMO_AMAZON_PCT = 6.0
@@ -99,6 +100,13 @@ MARCHE_TOP_RADAR = [
     "omega", "d1 milano", "swatch", "timex", "garmin", "suunto",
 ]
 
+# Bonus qualità per evitare che sconti alti sui fashion/entry scavalchino sempre i marchi top
+MARCHE_PRESTIGIO = {
+    "hamilton", "tissot", "seiko", "longines", "tudor", "bulova", "citizen",
+    "orient", "mido", "certina", "oris", "frederique constant", "eberhard",
+    "tag heuer", "omega", "d1 milano",
+}
+
 # Marchi/parole valide per Amazon
 PAROLE_OROLOGI_AMAZON = [
     "seiko", "casio", "g-shock", "gshock", "edifice", "citizen", "orient",
@@ -171,6 +179,7 @@ def carica_stato():
         "radar_postati": [],
         "radar_stock": {},
         "radar_inizializzati": [],
+        "ultime_marche": [],
     }
     if not os.path.exists(FILE_STATO):
         return base
@@ -185,6 +194,7 @@ def carica_stato():
             base["radar_postati"] = dati.get("radar_postati", [])
             base["radar_stock"] = dati.get("radar_stock", {})
             base["radar_inizializzati"] = dati.get("radar_inizializzati", [])
+            base["ultime_marche"] = dati.get("ultime_marche", [])
             return base
     except Exception as e:
         print(f"Errore lettura {FILE_STATO}: {e}")
@@ -194,6 +204,7 @@ def carica_stato():
 def salva_stato(stato):
     stato["asin"] = stato["asin"][-MAX_STORICO_ASIN:]
     stato["radar_postati"] = stato["radar_postati"][-MAX_STORICO_RADAR:]
+    stato["ultime_marche"] = stato.get("ultime_marche", [])[-MEMORIA_ULTIME_MARCHE:]
     with open(FILE_STATO, "w", encoding="utf-8") as f:
         json.dump(stato, f, indent=2, ensure_ascii=False)
 
@@ -241,7 +252,6 @@ def e_edizione_limitata(titolo, tags=""):
 
 
 def pulisci_titolo_radar(titolo):
-    """Rimuove trattini bassi sporchi davanti ai codici modello (es. '_97B223' -> '97B223')."""
     t = re.sub(r"\s+_([A-Za-z0-9])", r" \1", titolo or "")
     return re.sub(r"\s+", " ", t).strip()
 
@@ -834,7 +844,15 @@ def raccogli_da_radar(stato, forza_test=False):
                     if solo_dollari:
                         priorita = 99
 
-                    punteggio = (sconto_pct or 0.0) * 2.5 + min(risparmio, 350.0) * 0.35 + min(p_nuovo, 1200.0) * 0.03
+                    # Punteggio bilanciato: premia marchi top e risparmio reale in euro
+                    bonus_marca = 25.0 if marca.lower() in MARCHE_PRESTIGIO else 0.0
+                    sconto_cap = min(sconto_pct or 0.0, 35.0)
+                    punteggio = (
+                        bonus_marca
+                        + sconto_cap * 1.5
+                        + min(risparmio, 400.0) * 0.40
+                        + min(p_nuovo, 1500.0) * 0.025
+                    )
 
                     trovati_negozio += 1
                     candidati.append({
@@ -868,9 +886,9 @@ def raccogli_da_radar(stato, forza_test=False):
 
 
 # ==========================================
-# ORDINAMENTO QUALITATIVO + ALTERNANZA
+# ORDINAMENTO + ROTAZIONE PER MARCHIO E NEGOZIO
 # ==========================================
-def ordina_e_mescola_candidati(candidati):
+def ordina_e_mescola_candidati(candidati, ultime_marche=None):
     """
     Ordine:
       1: Amazon | 2: Restock EUR | 3: Drop EUR
@@ -878,8 +896,10 @@ def ordina_e_mescola_candidati(candidati):
       5: Sconti Fascia Entry EUR (60€-180€)
       6: Limited non scontate EUR
       99: Prodotti in USD (ultima spiaggia)
-    Alterna negozi e marchi diversi premiando le offerte migliori.
+    Ruota prima i marchi non usciti di recente e alterna negozi diversi.
     """
+    recenti = set(m.lower() for m in (ultime_marche or []))
+
     candidati.sort(key=lambda x: (x["priorita"], -x.get("punteggio", 0.0)))
     unici = []
     visti_id = set()
@@ -892,35 +912,40 @@ def ordina_e_mescola_candidati(candidati):
     per_priorita = {}
     for c in unici:
         p = c["priorita"]
-        negozio = c.get("negozio") or "Altro"
-        per_priorita.setdefault(p, {}).setdefault(negozio, []).append(c)
+        marca_k = (c.get("marca") or c.get("negozio") or "altro").lower()
+        per_priorita.setdefault(p, {}).setdefault(marca_k, []).append(c)
 
     risultato = []
     for p in sorted(per_priorita.keys()):
-        gruppi_negozio = per_priorita[p]
-        negozi = list(gruppi_negozio.keys())
-        random.shuffle(negozi)
+        gruppi_marca = per_priorita[p]
 
-        for n in negozi:
-            gruppi_negozio[n].sort(
-                key=lambda x: x.get("punteggio", 0.0) + random.uniform(0.0, 22.0),
+        # I marchi non usciti negli ultimi giri passano davanti a quelli appena postati
+        marche_fresche = [m for m in gruppi_marca.keys() if m not in recenti]
+        marche_recenti = [m for m in gruppi_marca.keys() if m in recenti]
+        random.shuffle(marche_fresche)
+        random.shuffle(marche_recenti)
+        ordine_marche = marche_fresche + marche_recenti
+
+        for m in ordine_marche:
+            gruppi_marca[m].sort(
+                key=lambda x: x.get("punteggio", 0.0) + random.uniform(0.0, 18.0),
                 reverse=True,
             )
 
-        ultima_marca = None
-        while any(gruppi_negozio[n] for n in negozi):
-            for n in negozi:
-                lista = gruppi_negozio[n]
+        ultimo_negozio = None
+        while any(gruppi_marca[m] for m in ordine_marche):
+            for m in ordine_marche:
+                lista = gruppi_marca[m]
                 if not lista:
                     continue
                 scelto_idx = 0
-                if ultima_marca:
+                if ultimo_negozio:
                     for i, item in enumerate(lista):
-                        if (item.get("marca") or "").lower() != ultima_marca:
+                        if item.get("negozio") != ultimo_negozio:
                             scelto_idx = i
                             break
                 scelto = lista.pop(scelto_idx)
-                ultima_marca = (scelto.get("marca") or "").lower()
+                ultimo_negozio = scelto.get("negozio")
                 risultato.append(scelto)
 
     return risultato
@@ -1049,6 +1074,9 @@ def pubblica_item(item, token, channel, amazon_tag, stato, raw_img, url_finale, 
         else:
             if item["id_univoco"] not in stato["radar_postati"]:
                 stato["radar_postati"].append(item["id_univoco"])
+            marca_k = (item.get("marca") or "").lower()
+            if marca_k:
+                stato.setdefault("ultime_marche", []).append(marca_k)
         return True
     return False
 
@@ -1074,56 +1102,77 @@ def main():
     candidati_radar, stato_modificato, sessioni = raccogli_da_radar(stato, forza_test)
     candidati.extend(candidati_radar)
 
-    unici = ordina_e_mescola_candidati(candidati)
-    print(f"Candidati totali pronti (EUR fascia top -> entry -> limited -> USD): {len(unici)}")
+    unici = ordina_e_mescola_candidati(candidati, stato.get("ultime_marche", []))
+    print(f"Candidati totali pronti (blocco marca doppia attivo): {len(unici)}")
 
     limite = 1 if forza_test else MAX_POST_PER_GIRO
     pubblicati_ora = 0
     saltati_senza_foto = 0
+    marche_usate_giro = set()
+    negozi_usati_giro = set()
+    riserva_stesso_negozio = []
     riserva_usd = []
 
-    for item in unici:
-        if pubblicati_ora >= limite:
-            break
+    def prova_pubblicare(item, richiedi_negozio_diverso=True, permetti_usd=False):
+        nonlocal pubblicati_ora, saltati_senza_foto, stato_modificato
+
+        marca_k = (item.get("marca") or item.get("negozio") or "").lower()
+        negozio = item.get("negozio") or ""
+
+        # Blocco rigido: mai due orologi dello stesso marchio nello stesso giro
+        if item["tipo"] != "AMAZON" and marca_k in marche_usate_giro:
+            return
+
+        # Cerca prima di variare anche negozio
+        if richiedi_negozio_diverso and item["tipo"] != "AMAZON" and negozio in negozi_usati_giro:
+            riserva_stesso_negozio.append(item)
+            return
 
         if item["tipo"] == "AMAZON":
             raw_img, titolo_pieno = recupera_foto_amazon(item["id_univoco"], item["desc_html"], item["img_url"])
             url_finale = costruisci_link_amazon(item["id_univoco"], amazon_tag)
             titolo_finale = titolo_pieno or item["titolo"]
         else:
-            if item["valuta"] == "$":
+            if not permetti_usd and item["valuta"] == "$":
                 riserva_usd.append(item)
-                continue
-            opener, val_sess, tasso_sess = sessioni.get(item["negozio"], (None, "EUR", 1.0))
+                return
+            opener, val_sess, tasso_sess = sessioni.get(negozio, (None, "EUR", 1.0))
             item = verifica_prezzo_reale_radar(item, opener, val_sess, tasso_sess)
-            if item["valuta"] == "$":
+            if not permetti_usd and item["valuta"] == "$":
                 riserva_usd.append(item)
-                continue
+                return
             raw_img = scarica_immagine_valida(item["img_url"])
             url_finale = item["url"]
             titolo_finale = item["titolo"]
 
         if not raw_img:
             saltati_senza_foto += 1
-            continue
+            return
 
         if pubblica_item(item, token, channel, amazon_tag, stato, raw_img, url_finale, titolo_finale):
             stato_modificato = True
             pubblicati_ora += 1
+            if item["tipo"] != "AMAZON":
+                marche_usate_giro.add(marca_k)
+                negozi_usati_giro.add(negozio)
 
-    # Solo se non c'era letteralmente nessun prodotto valido in EUR, usa la riserva USD
+    # Passaggio 1: marchi diversi E negozi diversi in EUR
+    for item in unici:
+        if pubblicati_ora >= limite:
+            break
+        prova_pubblicare(item, richiedi_negozio_diverso=True, permetti_usd=False)
+
+    # Passaggio 2: se manca ancora un post, accetta stesso negozio MA sempre marchio diverso
+    for item in riserva_stesso_negozio:
+        if pubblicati_ora >= limite:
+            break
+        prova_pubblicare(item, richiedi_negozio_diverso=False, permetti_usd=False)
+
+    # Passaggio 3: riserva USD solo se non c'è nessun altro prodotto valido in EUR
     for item in riserva_usd:
         if pubblicati_ora >= limite:
             break
-        opener, val_sess, tasso_sess = sessioni.get(item["negozio"], (None, "USD", 1.0))
-        item = verifica_prezzo_reale_radar(item, opener, val_sess, tasso_sess)
-        raw_img = scarica_immagine_valida(item["img_url"])
-        if not raw_img:
-            saltati_senza_foto += 1
-            continue
-        if pubblica_item(item, token, channel, amazon_tag, stato, raw_img, item["url"], item["titolo"]):
-            stato_modificato = True
-            pubblicati_ora += 1
+        prova_pubblicare(item, richiedi_negozio_diverso=False, permetti_usd=True)
 
     print(
         f"[{ora_italia()}] Fine giro -> Pubblicati: {pubblicati_ora} | "
