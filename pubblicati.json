@@ -36,7 +36,9 @@
     "Ferrari Luca Gioielli:16522091037021",
     "Orafo La Morgia:10292126613833",
     "Ferrari Luca Gioielli:16523466801501",
-    "Orafo La Morgia:9168026599753"
+    "Orafo La Morgia:9168026599753",
+    "Ferrari Luca Gioielli:16652279873885",
+    "Orafo La Morgia:6788785438892"
   ],
   "radar_stock": {
     "D1 Milano:15310840234354": true,
@@ -1098,9 +1100,9 @@
     "Orafo La Morgia"
   ],
   "ultime_marche": [
-    "casio",
-    "tissot",
     "festina",
-    "seiko"
+    "seiko",
+    "bulova",
+    "tissot"
   ]
 }
