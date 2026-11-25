@@ -106,7 +106,9 @@
     "Ferrari Luca Gioielli:16232022606173",
     "Gioielleria Petrillo:15481662341444",
     "Ferrari Luca Gioielli:16518636372317",
-    "Orafo La Morgia:10341115461961"
+    "Orafo La Morgia:10341115461961",
+    "Ferrari Luca Gioielli:16518626607453",
+    "Orafo La Morgia:10341145903433"
   ],
   "radar_stock": {
     "D1 Milano:15310840234354": true,
@@ -1168,8 +1170,8 @@
     "Orafo La Morgia"
   ],
   "ultime_marche": [
-    "citizen",
     "bulova",
+    "festina",
     "bulova",
     "festina"
   ]
