@@ -7,7 +7,8 @@
     "B0CNRP67W4",
     "B0F66TFJY3",
     "B0CDC6C4TQ",
-    "B0CDC6Y617"
+    "B0CDC6Y617",
+    "B0DSC72873"
   ],
   "radar_postati": [
     "Orafo La Morgia:9116173533513",
@@ -236,7 +237,8 @@
     "Ferrari Luca Gioielli:16565360853341",
     "Ferrari Luca Gioielli:15633259397469",
     "Ferrari Luca Gioielli:16186019742045",
-    "Ferrari Luca Gioielli:16546878751069"
+    "Ferrari Luca Gioielli:16546878751069",
+    "Ferrari Luca Gioielli:16565151859037"
   ],
   "radar_stock": {
     "D1 Milano:15310840234354": true,
@@ -1309,9 +1311,9 @@
     "Orafo La Morgia"
   ],
   "ultime_marche": [
-    "tissot",
     "bulova",
     "festina",
-    "citizen"
+    "citizen",
+    "casio"
   ]
 }
